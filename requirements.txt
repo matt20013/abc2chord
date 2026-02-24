@@ -1,0 +1,4 @@
+music21
+pandas
+scikit-learn
+numpy
