@@ -37,10 +37,12 @@ except ImportError:
 
 def main():
     parser = argparse.ArgumentParser(description="Train LSTM chord model")
-    parser.add_argument("--epochs",       type=int,   default=50)
-    parser.add_argument("--batch-size",   type=int,   default=8)
-    parser.add_argument("--hidden",       type=int,   default=128,  help="LSTM hidden size")
-    parser.add_argument("--layers",       type=int,   default=2,    help="LSTM layers")
+    parser.add_argument("--epochs",        type=int,   default=50)
+    parser.add_argument("--batch-size",    type=int,   default=8)
+    parser.add_argument("--hidden",        type=int,   default=64,   help="LSTM hidden size per direction")
+    parser.add_argument("--layers",        type=int,   default=2,    help="LSTM layers")
+    parser.add_argument("--dropout",       type=float, default=0.5,  help="Dropout probability (LSTM + output layer)")
+    parser.add_argument("--weight-decay",  type=float, default=1e-4, help="L2 weight decay for Adam")
     parser.add_argument("--lr",           type=float, default=1e-3)
     parser.add_argument("--lr-patience",  type=int,   default=10)
     parser.add_argument("--lr-factor",    type=float, default=0.5)
@@ -163,20 +165,22 @@ def main():
         hidden_dim=args.hidden,
         num_layers=args.layers,
         num_classes=num_classes,
-        dropout=0.3,
+        dropout=args.dropout,
         bidirectional=args.bidirectional,
     ).to(device)
     bidir_tag = "bidirectional" if args.bidirectional else "unidirectional"
     sd_tag = "onehot-12" if sd_onehot else "scalar"
     print(f"Model: {args.layers}-layer {bidir_tag} LSTM, hidden={args.hidden}, "
-          f"dropout=0.3, scale_degree={sd_tag}, input_dim={input_dim}")
+          f"dropout={args.dropout}, wd={args.weight_decay}, "
+          f"scale_degree={sd_tag}, input_dim={input_dim}")
 
     pad_idx = vocab.label_to_idx[ChordVocabulary.PAD]
     criterion = torch.nn.CrossEntropyLoss(
         weight=class_weights.to(device),
         ignore_index=pad_idx,
     )
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,
+                                  weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=args.lr_factor,
         patience=args.lr_patience, min_lr=args.min_lr,
@@ -188,7 +192,7 @@ def main():
     model_config = {
         "input_dim": input_dim, "hidden_dim": args.hidden,
         "num_layers": args.layers, "num_classes": num_classes,
-        "dropout": 0.3, "bidirectional": args.bidirectional,
+        "dropout": args.dropout, "bidirectional": args.bidirectional,
         "one_hot_scale_degree": sd_onehot,
     }
     with open(os.path.join(args.out, "model_config.json"), "w") as f:

@@ -193,8 +193,8 @@ if TORCH_AVAILABLE:
     class LSTMChordModel(nn.Module):
         """LSTM that takes a sequence of note features and predicts chord at each step."""
 
-        def __init__(self, input_dim=INPUT_DIM, hidden_dim=128, num_layers=2, num_classes=50,
-                     dropout=0.3, bidirectional=True):
+        def __init__(self, input_dim=INPUT_DIM, hidden_dim=64, num_layers=2, num_classes=50,
+                     dropout=0.5, bidirectional=True):
             super().__init__()
             self.input_dim = input_dim
             self.hidden_dim = hidden_dim

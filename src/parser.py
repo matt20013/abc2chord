@@ -243,6 +243,42 @@ def _extract_features_from_score(score):
     return dataset
 
 
+def _sanitise_abc_body(abc_str: str) -> str:
+    """
+    Strip non-pitch annotation characters that music21 misreads as notes.
+
+    Removed from non-header lines only (header lines like K:, M:, T: are
+    left untouched). Quoted chord symbols (e.g. "Caug") are also protected.
+
+    Stripped:
+      x\\d*  — invisible rests     (x2, x)
+      y\\d*  — playback spacers    (y4, y)
+      J      — slide ornament (non-standard)
+      S      — segno marker (non-standard in some ABC dialects)
+      H      — fermata / hold ornament
+      L      — accent ornament
+      u      — up-bow decoration
+      v      — down-bow decoration
+    """
+    out = []
+    for line in abc_str.splitlines():
+        if re.match(r'^[A-Za-z]:', line):
+            out.append(line)            # header line — leave unchanged
+            continue
+        # Remove invisible rests and spacers (with optional length digit)
+        line = re.sub(r'[xy]\d*', '', line)
+        # Remove decoration chars from unquoted segments only
+        # (splits on "..." to protect chord symbols like "Caug")
+        parts = re.split(r'(".*?")', line)
+        clean_parts = []
+        for i, part in enumerate(parts):
+            if i % 2 == 0:              # outside quotes
+                part = re.sub(r'[JSHLuv]', '', part)
+            clean_parts.append(part)
+        out.append(''.join(clean_parts))
+    return '\n'.join(out)
+
+
 def _split_abc_file(content):
     """Split multi-tune ABC content into one string per tune (X:1, X: 2, etc.)."""
     # Match X: followed by optional space and digits (start of new tune)
@@ -269,7 +305,7 @@ def extract_features_from_abc(abc_file_path):
         if hasattr(score, "scores") and score.scores:
             return _extract_features_from_score(score.scores[0])
         return _extract_features_from_score(score)
-    score = music21.converter.parse(tunes[0], format="abc")
+    score = music21.converter.parse(_sanitise_abc_body(tunes[0]), format="abc")
     if hasattr(score, "scores") and score.scores:
         return _extract_features_from_score(score.scores[0])
     return _extract_features_from_score(score)
@@ -289,7 +325,7 @@ def _iter_scores_from_abc(abc_file_path):
         return
     for tune_str in tunes:
         try:
-            score = music21.converter.parse(tune_str, format="abc")
+            score = music21.converter.parse(_sanitise_abc_body(tune_str), format="abc")
             if hasattr(score, "scores") and score.scores:
                 yield from score.scores
             else:
