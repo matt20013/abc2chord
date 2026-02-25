@@ -79,7 +79,7 @@ class TestTuneToArrays(unittest.TestCase):
         X, y = tune_to_arrays(tune, vocab=self.vocab, normalize=True, one_hot_scale_degree=True)
 
         self.assertEqual(X.shape, (2, 17)) # 4 base + 12 one-hot + 1 meter
-        self.assertEqual(y.shape, (2,))
+        self.assertEqual(y.shape, (2, 12)) # 12-dim Multi-Hot
 
         # Check scale degree one-hot
         # First note: scale_degree 0 -> index 4 (duration, beat, measure, is_rest take 0-3)
@@ -91,12 +91,12 @@ class TestTuneToArrays(unittest.TestCase):
         tune = [
             {"duration": 4.0, "beat": 1.0, "measure": 1, "is_rest": 0, "scale_degree": 0, "target_chord": "C", "meter_norm": 0.5}
         ]
-        X, chords = tune_to_arrays(tune, vocab=None, normalize=False, one_hot_scale_degree=False)
+        X, y = tune_to_arrays(tune, vocab=None, normalize=False, one_hot_scale_degree=False)
 
         self.assertEqual(X.shape, (1, 6)) # 4 base + 1 scalar + 1 meter
         self.assertEqual(X[0, 0], 4.0) # duration
         self.assertEqual(X[0, 4], 0.0) # scale degree scalar (0/11)
-        self.assertEqual(chords[0], "C")
+        self.assertEqual(y.shape, (1, 12)) # 12-dim Multi-Hot
 
 class TestChordSequenceDataset(unittest.TestCase):
     def setUp(self):
@@ -118,11 +118,12 @@ class TestChordSequenceDataset(unittest.TestCase):
 
         # Check padding (after index 0)
         self.assertTrue(torch.all(X[1:] == 0))
-        self.assertTrue(torch.all(y[1:] == 0)) # PAD index is 0
+        # y should be padded with -1.0 vectors
+        self.assertTrue(torch.all(y[1:] == -1.0))
 
 class TestLSTMChordModel(unittest.TestCase):
     def setUp(self):
-        self.model = LSTMChordModel(input_dim=17, hidden_dim=8, num_layers=1, num_classes=5)
+        self.model = LSTMChordModel(input_dim=17, hidden_dim=8, num_layers=1, num_classes=12)
 
     def test_forward_pass(self):
         batch_size = 2
@@ -133,18 +134,20 @@ class TestLSTMChordModel(unittest.TestCase):
 
         logits = self.model(X, lengths=lengths)
 
-        self.assertEqual(logits.shape, (batch_size, seq_len, 5))
+        self.assertEqual(logits.shape, (batch_size, seq_len, 12))
 
 class TestTrainingFunctions(unittest.TestCase):
     def setUp(self):
-        self.model = LSTMChordModel(input_dim=17, hidden_dim=8, num_layers=1, num_classes=5)
-        self.criterion = torch.nn.CrossEntropyLoss()
+        self.model = LSTMChordModel(input_dim=17, hidden_dim=8, num_layers=1, num_classes=12)
+        # Using BCEWithLogitsLoss for Multi-Hot Target
+        self.criterion = torch.nn.BCEWithLogitsLoss()
         self.optimizer = torch.optim.Adam(self.model.parameters())
         self.device = torch.device("cpu")
 
         # Mock data
         X = torch.randn(2, 5, 17)
-        y = torch.randint(0, 5, (2, 5))
+        # y needs to be (Batch, Seq, 12) float
+        y = torch.randn(2, 5, 12)
         lengths = torch.tensor([5, 5])
         self.loader = [(X, y, lengths)]
 
@@ -161,23 +164,25 @@ class TestInference(unittest.TestCase):
     def setUp(self):
         self.vocab = ChordVocabulary()
         self.vocab.add_label("C")
-        self.model = LSTMChordModel(input_dim=17, hidden_dim=8, num_classes=len(self.vocab))
+        self.model = LSTMChordModel(input_dim=17, hidden_dim=8, num_classes=12)
 
     def test_predict_chords(self):
         X = torch.randn(1, 5, 17)
         lengths = torch.tensor([5])
 
-        preds = predict_chords(self.model, X, lengths=lengths, vocab=self.vocab)
-        self.assertEqual(len(preds), 1)
-        self.assertEqual(len(preds[0]), 5)
-        self.assertIsInstance(preds[0][0], str)
+        logits = predict_chords(self.model, X, lengths=lengths, vocab=self.vocab)
+        self.assertEqual(len(logits), 1)
+        self.assertEqual(len(logits[0]), 5)
+        # predict_chords now returns logits, so it should be a numpy array of shape (1, 5, 12)
+        self.assertEqual(logits.shape, (1, 5, 12))
 
     def test_predict_chords_from_tune(self):
         tune = [
-            {"duration": 1.0, "beat": 1.0, "measure": 1, "is_rest": 0, "scale_degree": 0, "target_chord": "C"}
+            {"duration": 1.0, "beat": 1.0, "measure": 1, "is_rest": 0, "scale_degree": 0, "target_chord": "C", "key_tonic_pc": 0}
         ]
         preds = predict_chords_from_tune(self.model, tune, self.vocab)
         self.assertEqual(len(preds), 1)
+        self.assertIsInstance(preds[0], str)
 
 class TestLoadModel(unittest.TestCase):
     def test_load_model_and_vocab(self):
@@ -187,8 +192,8 @@ class TestLoadModel(unittest.TestCase):
             vocab.add_label("C")
             vocab.save(os.path.join(tmpdir, "chord_vocab.json"))
 
-            # Create dummy model
-            model = LSTMChordModel(num_classes=len(vocab))
+            # Create dummy model with correct num_classes
+            model = LSTMChordModel(num_classes=12)
             torch.save(model.state_dict(), os.path.join(tmpdir, "lstm_chord.pt"))
 
             # Create dummy config
@@ -199,6 +204,7 @@ class TestLoadModel(unittest.TestCase):
             self.assertIsInstance(loaded_model, LSTMChordModel)
             self.assertIsInstance(loaded_vocab, ChordVocabulary)
             self.assertEqual(loaded_model.hidden_dim, 32)
+            self.assertEqual(loaded_model.num_classes, 12)
 
 class TestHelpers(unittest.TestCase):
     def test_get_input_dim(self):
@@ -207,12 +213,13 @@ class TestHelpers(unittest.TestCase):
 
     def test_collate_padded(self):
         batch = [
-            (torch.randn(5, 10), torch.randn(5), 5),
-            (torch.randn(5, 10), torch.randn(5), 5)
+            (torch.randn(5, 10), torch.randn(5, 12), 5),
+            (torch.randn(5, 10), torch.randn(5, 12), 5)
         ]
         X, y, lengths = collate_padded(batch)
         self.assertEqual(X.shape[0], 2)
         self.assertEqual(y.shape[0], 2)
+        self.assertEqual(y.shape[2], 12)
         self.assertEqual(lengths.shape[0], 2)
 
 if __name__ == "__main__":
