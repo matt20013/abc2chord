@@ -1,6 +1,17 @@
 """
-Load training data from ABC files. Uses maplewood.abc and maplewood_other.abc
-from the local tunes clone (../tunes); tunes without chords are disregarded.
+Load training data from ABC files.
+
+Default training corpus (TRAINING_ABC_FILES):
+  From ~/Documents/GitHub/tunes/abcs/:
+    maplewood.abc       – 134 tunes with chords
+    maplewood_other.abc –  30 tunes with chords
+    NEFR.abc            – 147 tunes with chords
+    pgh_sets_tunebook   –  76 tunes with chords
+    andy_cutting_tunes  –  53 tunes with chords
+                          ─────────────────────
+  Total                   440 annotated tunes
+
+Tunes without chords are silently skipped.
 """
 import os
 import random
@@ -32,14 +43,26 @@ DATA_ABC_FILES = [
 
 
 def _resolve_abc_paths(abc_paths):
-    """Use data/ fallback when default paths don't exist."""
+    """
+    Return the list of ABC paths to load.
+
+    - If abc_paths is given explicitly (CLI --abc-paths), use those.
+    - Otherwise, collect every file that actually exists from TRAINING_ABC_FILES,
+      then supplement with any DATA_ABC_FILES entries not already covered.
+      This means the tunes-repo files AND any data/ overrides are all used.
+    """
     if abc_paths is not None:
-        return abc_paths
-    if any(os.path.isfile(p) for p in TRAINING_ABC_FILES):
-        return list(TRAINING_ABC_FILES)
-    if any(os.path.isfile(p) for p in DATA_ABC_FILES):
-        return [p for p in DATA_ABC_FILES if os.path.isfile(p)]
-    return list(TRAINING_ABC_FILES)
+        return [p for p in abc_paths if os.path.isfile(p)] or list(abc_paths)
+
+    found = [p for p in TRAINING_ABC_FILES if os.path.isfile(p)]
+
+    # Add data/ files whose basename isn't already covered by a tunes-repo file
+    covered_names = {os.path.basename(p) for p in found}
+    for p in DATA_ABC_FILES:
+        if os.path.isfile(p) and os.path.basename(p) not in covered_names:
+            found.append(p)
+
+    return found if found else list(TRAINING_ABC_FILES)
 
 # Chord label meaning "no chord"
 NO_CHORD = "N.C."
