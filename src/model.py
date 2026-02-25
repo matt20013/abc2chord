@@ -180,7 +180,7 @@ if TORCH_AVAILABLE:
         """LSTM that takes a sequence of note features and predicts chord at each step."""
 
         def __init__(self, input_dim=INPUT_DIM, hidden_dim=128, num_layers=2, num_classes=50,
-                     dropout=0.2, bidirectional=False):
+                     dropout=0.3, bidirectional=True):
             super().__init__()
             self.input_dim = input_dim
             self.hidden_dim = hidden_dim
@@ -195,6 +195,9 @@ if TORCH_AVAILABLE:
                 dropout=dropout if num_layers > 1 else 0,
                 bidirectional=bidirectional,
             )
+            # Explicit dropout applied to LSTM output before the classifier,
+            # forcing the model to find multiple independent chord cues.
+            self.output_dropout = nn.Dropout(dropout)
             fc_in = hidden_dim * 2 if bidirectional else hidden_dim
             self.fc = nn.Linear(fc_in, num_classes)
 
@@ -211,6 +214,7 @@ if TORCH_AVAILABLE:
                 )
             else:
                 out, _ = self.lstm(x)
+            out = self.output_dropout(out)
             logits = self.fc(out)  # (batch, seq_len, num_classes)
             return logits
 

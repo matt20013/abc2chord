@@ -7,6 +7,7 @@ tagged with the commit hash so results are always reproducible.
 import json
 import os
 import subprocess
+import sys
 import datetime
 
 _HISTORY_FILE = "run_history.json"
@@ -66,15 +67,19 @@ class ExperimentTracker:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def start_run(self, args_dict):
+    def start_run(self, args_dict, prompt_if_dirty=True):
         """
         Call once before training begins. Captures git state and prints a
         warning if the working tree has uncommitted changes.
 
+        When prompt_if_dirty=True (the default) and the worktree is dirty,
+        the user is asked to confirm before training proceeds. Pass
+        prompt_if_dirty=False to suppress the prompt (e.g. in CI).
+
         Returns the short commit hash for use in filenames.
         """
         self._commit, self._short, self._dirty = get_git_info()
-        self._print_header()
+        self._print_header(prompt_if_dirty=prompt_if_dirty)
 
         self._run = {
             "run_id": f"{self._short}_{datetime.datetime.now().strftime('%Y%m%dT%H%M%S')}",
@@ -110,31 +115,45 @@ class ExperimentTracker:
             entry["lr"] = lr
         self._run["epoch_losses"].append(entry)
 
-    def finish_run(self, final_train_loss, best_val_loss, final_lr, best_model_path):
-        """Persist the completed run to run_history.json."""
+    def finish_run(self, final_train_loss, best_val_loss, final_lr, best_model_path,
+                   status="completed"):
+        """Persist the run to run_history.json.  status is 'completed' or 'interrupted'."""
         if self._run is None:
             return
-        self._run["final_train_loss"] = round(float(final_train_loss), 6)
+        self._run["final_train_loss"] = (
+            round(float(final_train_loss), 6) if final_train_loss is not None else None
+        )
         self._run["best_val_loss"] = (
             round(float(best_val_loss), 6) if best_val_loss is not None else None
         )
         self._run["final_lr"] = final_lr
         self._run["best_model_path"] = best_model_path
-        self._run["status"] = "completed"
+        self._run["status"] = status
         self._append_to_history()
-        print(f"\n[tracker] Run logged → {self.history_path}  (id: {self._run['run_id']})")
+        print(f"\n[tracker] Run logged → {self.history_path}  "
+              f"(id: {self._run['run_id']}, status: {status})")
 
     # ── Internals ────────────────────────────────────────────────────────────
 
-    def _print_header(self):
+    def _print_header(self, prompt_if_dirty=True):
         bar = "─" * 60
         print(bar)
         print(f"  abc2chord experiment tracker")
         print(f"  Commit : {self._commit}")
         if self._dirty:
-            print("  ⚠  WARNING: DIRTY_WORKTREE — uncommitted changes detected.")
-            print("     Results tagged as dirty and may not be fully reproducible.")
-        print(bar)
+            print("  WARNING: DIRTY WORKTREE — uncommitted changes detected.")
+            print("  Results will be tagged '_dirty' and may not be reproducible.")
+            print(bar)
+            if prompt_if_dirty:
+                try:
+                    answer = input("  Continue training with dirty worktree? [y/N] ").strip().lower()
+                except EOFError:
+                    answer = ""
+                if answer not in ("y", "yes"):
+                    print("  Aborted. Commit your changes first, then re-run.")
+                    sys.exit(1)
+        else:
+            print(bar)
 
     def _append_to_history(self):
         history = _load_history(self.history_path)

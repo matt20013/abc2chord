@@ -45,11 +45,12 @@ def main():
     parser.add_argument("--lr-patience",  type=int,   default=10)
     parser.add_argument("--lr-factor",    type=float, default=0.5)
     parser.add_argument("--min-lr",       type=float, default=1e-5)
-    parser.add_argument("--val-fraction", type=float, default=0.1,  help="Fraction of tunes held out for validation")
+    parser.add_argument("--val-fraction", type=float, default=0.2,  help="Fraction of tunes held out for validation")
     parser.add_argument("--out",          type=str,   default="checkpoints")
     parser.add_argument("--abc-paths",    nargs="*",  default=None, help="ABC files (default: training set)")
     parser.add_argument("--augment-keys", action="store_true", help="Transpose every tune into all 12 keys")
-    parser.add_argument("--bidirectional", action="store_true", help="Use bidirectional LSTM")
+    parser.add_argument("--bidirectional",    action=argparse.BooleanOptionalAction, default=True,
+                        help="Bidirectional LSTM (default: on; use --no-bidirectional to disable)")
     args = parser.parse_args()
 
     if not TORCH_AVAILABLE or torch is None:
@@ -154,11 +155,11 @@ def main():
         hidden_dim=args.hidden,
         num_layers=args.layers,
         num_classes=num_classes,
-        dropout=0.2,
+        dropout=0.3,
         bidirectional=args.bidirectional,
     ).to(device)
     bidir_tag = "bidirectional" if args.bidirectional else "unidirectional"
-    print(f"Model: {args.layers}-layer {bidir_tag} LSTM, hidden={args.hidden}")
+    print(f"Model: {args.layers}-layer {bidir_tag} LSTM, hidden={args.hidden}, dropout=0.3")
 
     pad_idx = vocab.label_to_idx[ChordVocabulary.PAD]
     criterion = torch.nn.CrossEntropyLoss(
@@ -177,7 +178,7 @@ def main():
     model_config = {
         "input_dim": INPUT_DIM, "hidden_dim": args.hidden,
         "num_layers": args.layers, "num_classes": num_classes,
-        "dropout": 0.2, "bidirectional": args.bidirectional,
+        "dropout": 0.3, "bidirectional": args.bidirectional,
     }
     with open(os.path.join(args.out, "model_config.json"), "w") as f:
         json.dump(model_config, f, indent=2)
@@ -187,33 +188,59 @@ def main():
     best_metric = float("inf")  # val_loss if val exists, else train_loss
     best_epoch = 0
     best_path = os.path.join(args.out, tracker.versioned_model_name("best_model"))
-    epoch_losses = []
 
-    for epoch in range(1, args.epochs + 1):
-        train_loss = train_epoch(model, train_loader, criterion, optimizer, device, pad_idx=pad_idx)
-        current_lr = optimizer.param_groups[0]["lr"]
-        scheduler.step(train_loss)
-        new_lr = optimizer.param_groups[0]["lr"]
-        lr_tag = f"  lr {current_lr:.2e}→{new_lr:.2e}" if new_lr != current_lr else f"  lr={current_lr:.2e}"
+    # Initialise so the interrupt handler always has valid values even if
+    # Ctrl+C is pressed before the first epoch completes.
+    train_loss = float("nan")
+    val_loss, val_acc = None, None
+    last_epoch = 0
 
-        val_loss, val_acc = None, None
-        if val_loader:
-            val_loss, val_acc = eval_epoch(model, val_loader, criterion, device, pad_idx=pad_idx)
-            line = (f"Epoch {epoch}/{args.epochs}  "
-                    f"train={train_loss:.4f}  val={val_loss:.4f}  "
-                    f"val_acc={val_acc:.1%}{lr_tag}")
-            monitor = val_loss
-        else:
-            line = f"Epoch {epoch}/{args.epochs}  loss={train_loss:.4f}{lr_tag}"
-            monitor = train_loss
+    try:
+        for epoch in range(1, args.epochs + 1):
+            train_loss = train_epoch(model, train_loader, criterion, optimizer, device, pad_idx=pad_idx)
+            current_lr = optimizer.param_groups[0]["lr"]
+            scheduler.step(train_loss)
+            new_lr = optimizer.param_groups[0]["lr"]
+            lr_tag = f"  lr {current_lr:.2e}→{new_lr:.2e}" if new_lr != current_lr else f"  lr={current_lr:.2e}"
 
-        print(line)
-        tracker.log_epoch(epoch, train_loss, val_loss=val_loss, val_acc=val_acc, lr=new_lr)
+            val_loss, val_acc = None, None
+            if val_loader:
+                val_loss, val_acc = eval_epoch(model, val_loader, criterion, device, pad_idx=pad_idx)
+                line = (f"Epoch {epoch}/{args.epochs}  "
+                        f"train={train_loss:.4f}  val={val_loss:.4f}  "
+                        f"val_acc={val_acc:.1%}{lr_tag}")
+                monitor = val_loss
+            else:
+                line = f"Epoch {epoch}/{args.epochs}  loss={train_loss:.4f}{lr_tag}"
+                monitor = train_loss
 
-        if monitor < best_metric:
-            best_metric = monitor
-            best_epoch = epoch
-            torch.save(model.state_dict(), best_path)
+            print(line)
+            tracker.log_epoch(epoch, train_loss, val_loss=val_loss, val_acc=val_acc, lr=new_lr)
+            last_epoch = epoch
+
+            if monitor < best_metric:
+                best_metric = monitor
+                best_epoch = epoch
+                torch.save(model.state_dict(), best_path)
+
+    except KeyboardInterrupt:
+        print("\n")
+        interrupted_path = os.path.join(args.out, "interrupted_model.pt")
+        torch.save(model.state_dict(), interrupted_path)
+        final_lr = optimizer.param_groups[0]["lr"]
+        tracker.finish_run(
+            final_train_loss=train_loss if last_epoch > 0 else None,
+            best_val_loss=best_metric if (val_loader and best_epoch > 0) else None,
+            final_lr=final_lr,
+            best_model_path=interrupted_path,
+            status="interrupted",
+        )
+        print(f"Training interrupted. Progress saved.")
+        print(f"  Completed epochs : {last_epoch}/{args.epochs}")
+        print(f"  Weights saved to : {interrupted_path}")
+        if best_epoch > 0:
+            print(f"  Best model at    : {best_path}  (epoch {best_epoch})")
+        return 0
 
     final_lr = optimizer.param_groups[0]["lr"]
     print(f"\nBest {'val' if val_loader else 'train'} loss {best_metric:.4f} "
