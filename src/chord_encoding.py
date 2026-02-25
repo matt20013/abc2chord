@@ -1,5 +1,5 @@
 import numpy as np
-from pychord import Chord
+import re
 
 # Note-to-pitch-class mapping (copied from src/parser.py to avoid circular imports)
 _NOTE_TO_PC = {
@@ -14,60 +14,27 @@ _PC_TO_NOTE = [
 
 def get_note_pc(note_name):
     """Map a note name (e.g., 'C', 'F#', 'Gb') to its pitch class (0-11)."""
-    # pychord might return just note names, but if it returns octaves, strip them.
-    # Assuming pychord components are just note names.
     return _NOTE_TO_PC.get(note_name)
 
-def encode_chord_to_target(chord_str, key_tonic_pc):
-    """
-    Convert a chord string to a 12-element multi-hot vector relative to the key tonic.
-
-    Args:
-        chord_str (str): The chord label (e.g., "G7", "Am", "N.C.").
-        key_tonic_pc (int): The pitch class of the local key tonic (0-11).
-
-    Returns:
-        np.array: A 12-element array of 0.0 and 1.0 (float32).
-    """
-    target = np.zeros(12, dtype=np.float32)
-
-    if not chord_str or chord_str == "N.C.":
-        return target
-
-    try:
-        # Handle simple cases manually if pychord fails or for speed?
-        # But pychord is robust.
-        # Note: pychord expects standard chord names.
-        # Our dataset might have simplified chords like "G" or "Am".
-        c = Chord(chord_str)
-        components = c.components()
-    except Exception:
-        # Fallback or silent failure (return zeros)
-        # print(f"Warning: Could not parse chord '{chord_str}'")
-        return target
-
-    for note in components:
-        pc = get_note_pc(note)
-        if pc is not None:
-            rel_pc = (pc - key_tonic_pc) % 12
-            target[rel_pc] = 1.0
-
-    return target
-
-def _generate_template_vector(indices):
-    """Helper to create a 12-element vector from a list of active indices."""
+def _generate_template_vector(indices_or_weights):
+    """Helper to create a 12-element vector from a list of active indices or (index, weight) tuples."""
     v = np.zeros(12, dtype=np.float32)
-    v[indices] = 1.0
+    for item in indices_or_weights:
+        if isinstance(item, tuple):
+            idx, weight = item
+            v[idx] = weight
+        else:
+            v[item] = 1.0
     return v
 
-def get_chord_templates():
+def get_chord_templates(hierarchical=False):
     """
     Generate a dictionary of relative chord templates.
     Returns:
         list of (root_offset, quality_suffix, vector)
     """
     # Base qualities (indices relative to root 0)
-    qualities = {
+    qualities_flat = {
         "":      [0, 4, 7],           # Major
         "m":     [0, 3, 7],           # Minor
         "7":     [0, 4, 7, 10],       # Dominant 7
@@ -80,28 +47,104 @@ def get_chord_templates():
         "sus2":  [0, 2, 7],           # Suspended 2
     }
 
+    qualities_hierarchical = {
+        "":      [(0, 1.0), (4, 0.9), (7, 0.6)],
+        "m":     [(0, 1.0), (3, 0.9), (7, 0.6)],
+        "7":     [(0, 1.0), (4, 0.9), (7, 0.5), (10, 0.8)],
+        "m7":    [(0, 1.0), (3, 0.9), (7, 0.5), (10, 0.7)],
+        "maj7":  [(0, 1.0), (4, 0.9), (7, 0.5), (11, 0.8)],
+        "dim":   [(0, 1.0), (3, 0.9), (6, 0.8)],
+        "dim7":  [(0, 1.0), (3, 0.9), (6, 0.8)], # Mapped to dim weights as placeholder/fallback
+        "aug":   [(0, 1.0), (4, 0.9), (8, 0.8)],
+        "sus4":  [(0, 1.0), (5, 0.9), (7, 0.6)],
+        "sus2":  [(0, 1.0), (2, 0.9), (7, 0.6)],
+    }
+
+    # Choose base set
+    qualities = qualities_hierarchical if hierarchical else qualities_flat
+
     templates = []
 
     for root_offset in range(12):
         for suffix, intervals in qualities.items():
             # Shift intervals by root_offset
-            indices = [(i + root_offset) % 12 for i in intervals]
-            vec = _generate_template_vector(indices)
+            if hierarchical:
+                shifted = [((idx + root_offset) % 12, weight) for idx, weight in intervals]
+            else:
+                shifted = [(idx + root_offset) % 12 for idx in intervals]
+
+            vec = _generate_template_vector(shifted)
             templates.append((root_offset, suffix, vec))
 
     return templates
 
-# Pre-compute templates once
-_CHORD_TEMPLATES = get_chord_templates()
+# Cache for templates
+_TEMPLATES_CACHE = {}
 
-def decode_target_to_chord(target_vector, key_tonic_pc):
+def _get_cached_templates(hierarchical=False):
+    if hierarchical not in _TEMPLATES_CACHE:
+        _TEMPLATES_CACHE[hierarchical] = get_chord_templates(hierarchical)
+    return _TEMPLATES_CACHE[hierarchical]
+
+def encode_chord_to_target(chord_str, key_tonic_pc, hierarchical=False):
+    """
+    Convert a chord string to a 12-element multi-hot vector relative to the key tonic.
+
+    Args:
+        chord_str (str): The chord label (e.g., "G7", "Am", "N.C.").
+        key_tonic_pc (int): The pitch class of the local key tonic (0-11).
+        hierarchical (bool): Whether to use soft/weighted targets.
+
+    Returns:
+        np.array: A 12-element array of float32.
+    """
+    target = np.zeros(12, dtype=np.float32)
+
+    if not chord_str or chord_str == "N.C.":
+        return target
+
+    # Parse root and suffix manually
+    root_match = re.match(r"^([A-G][b#]?)", chord_str)
+    if not root_match:
+        return target
+
+    root_note = root_match.group(1)
+    suffix = chord_str[len(root_note):]
+
+    root_pc = get_note_pc(root_note)
+    if root_pc is None:
+        return target
+
+    # Calculate relative root
+    rel_root = (root_pc - key_tonic_pc) % 12
+
+    # Get templates
+    templates = _get_cached_templates(hierarchical)
+
+    # Find matching template: (root_offset, suffix, vec)
+    # We loop to find the exact match for (rel_root, suffix)
+    found_vec = None
+    for r_off, sfx, vec in templates:
+        if r_off == rel_root and sfx == suffix:
+            found_vec = vec
+            break
+
+    if found_vec is not None:
+        return found_vec
+
+    # If suffix not found (e.g. unknown extension), return zero vector or fallback?
+    # Current behavior: return zeros (implicit in target init)
+    return target
+
+
+def decode_target_to_chord(target_vector, key_tonic_pc, hierarchical=False):
     """
     Find the closest chord label for the given relative target vector.
 
     Args:
         target_vector (np.array): 12-element predicted vector (logits or probs).
-                                  Should ideally be probabilities (0-1 range).
         key_tonic_pc (int): The pitch class of the local key tonic.
+        hierarchical (bool): Whether to use hierarchical templates for comparison.
 
     Returns:
         str: The best matching absolute chord string (e.g., "G7").
@@ -117,12 +160,13 @@ def decode_target_to_chord(target_vector, key_tonic_pc):
     best_chord = "N.C."
 
     # Using Cosine Similarity: (A . B) / (|A| |B|)
-    # Pre-computed template norms could speed this up, but this is fast enough.
     target_norm = np.linalg.norm(target_vector)
     if target_norm < 1e-6:
         return "N.C."
 
-    for root_offset, suffix, template_vec in _CHORD_TEMPLATES:
+    templates = _get_cached_templates(hierarchical)
+
+    for root_offset, suffix, template_vec in templates:
         template_norm = np.linalg.norm(template_vec) # Pre-computable
         if template_norm < 1e-6:
             continue

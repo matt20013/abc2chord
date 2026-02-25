@@ -59,6 +59,8 @@ def main():
                         help="Deprecated argument (kept for compatibility). Target is always multi-hot relative pitch classes.")
     parser.add_argument("--relaxed", action=argparse.BooleanOptionalAction, default=True,
                         help="Relaxed chord simplification (default: on).")
+    parser.add_argument("--hierarchical-targets", action=argparse.BooleanOptionalAction, default=False,
+                        help="Use hierarchical (weighted) targets for chord tones.")
 
     args = parser.parse_args()
 
@@ -145,10 +147,12 @@ def main():
     # ── Datasets & loaders ──────────────────────────────────────────────────
     # vocab=None because targets are generated via chord_encoding
     train_dataset = ChordSequenceDataset(train_tunes, vocab=None, normalize=True,
-                                         one_hot_scale_degree=sd_onehot)
+                                         one_hot_scale_degree=sd_onehot,
+                                         hierarchical=args.hierarchical_targets)
     val_dataset   = ChordSequenceDataset(val_tunes, vocab=None,
                                          max_len=train_dataset.max_len, normalize=True,
-                                         one_hot_scale_degree=sd_onehot)
+                                         one_hot_scale_degree=sd_onehot,
+                                         hierarchical=args.hierarchical_targets)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=min(args.batch_size, len(train_dataset)),
@@ -202,6 +206,7 @@ def main():
         "one_hot_scale_degree": sd_onehot,
         "target_type": "multi-hot", # updated
         "relaxed": args.relaxed,
+        "hierarchical_targets": args.hierarchical_targets,
     }
     with open(os.path.join(args.out, "model_config.json"), "w") as f:
         json.dump(model_config, f, indent=2)
