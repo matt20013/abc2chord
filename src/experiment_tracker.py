@@ -26,7 +26,10 @@ def get_git_info():
         status = subprocess.check_output(
             ["git", "status", "--porcelain"], stderr=subprocess.DEVNULL
         ).decode().strip()
-        return commit, short, bool(status)
+        # Only staged/modified/deleted lines indicate a dirty worktree.
+        # Untracked files (lines starting with '??') are ignored.
+        dirty_lines = [l for l in status.splitlines() if not l.startswith("??")]
+        return commit, short, bool(dirty_lines)
     except Exception:
         return "unknown", "unknown", False
 
