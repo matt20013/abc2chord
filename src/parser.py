@@ -499,9 +499,9 @@ def _get_adaptive_key_timeline(score) -> list[tuple[float, int, str]]:
 
         # Repeats & Double Bars (usually at end of measure)
         if m.rightBarline:
-            # Check style or type
-            style = m.rightBarline.style
-            if style in ['double', 'final', 'light-light', 'light-heavy', 'heavy-light', 'heavy-heavy']:
+            # Check style or type. In music21, .style is a Style object, .type is the string.
+            b_type = getattr(m.rightBarline, 'type', None)
+            if b_type in ['double', 'final', 'light-light', 'light-heavy', 'heavy-light', 'heavy-heavy']:
                  boundaries.add(float(m_end))
             # Repeat barlines
             if isinstance(m.rightBarline, music21.bar.Repeat):
