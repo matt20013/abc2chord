@@ -1,0 +1,97 @@
+file,tune_id,title,raw_key_header,stated_tonic,analyzed_tonic,analyzed_mode,analyzed_confidence,delta_semitones,relation
+maplewood.abc,2,Little Liza Jane,A,A,Gb,minor,0.791,9,RELATIVE
+maplewood.abc,4,Eli Greene's Cakewalk,Emin,E,G,major,0.886,3,RELATIVE
+maplewood.abc,20,Great North Run,G,G,E,minor,0.848,9,RELATIVE
+maplewood.abc,24,Big Scioty,Gmaj,G,E,minor,0.776,9,RELATIVE
+maplewood.abc,28,"Sherbrooke, Le Reel de",G,G,D,major,0.896,7,MODAL
+maplewood.abc,31,Far Frae Home,Gmaj,G,E,minor,0.841,9,RELATIVE
+maplewood.abc,33,North Carolina Breakdown *,G,G,E,minor,0.699,9,RELATIVE
+maplewood.abc,101,Waynesboro,G,G,E,minor,0.763,9,RELATIVE
+maplewood.abc,103,Shenandoah Falls,A,A,Gb,minor,0.838,9,RELATIVE
+maplewood.abc,301,Fair Jenny's,Dmaj,D,B,minor,0.85,9,RELATIVE
+maplewood.abc,303,Frank Ferrell's No1,G,G,D,major,0.892,7,MODAL
+maplewood.abc,305,Full Moon Jig,D,D,B,minor,0.81,9,RELATIVE
+maplewood.abc,320,Major Mackie,D,D,B,minor,0.827,9,RELATIVE
+maplewood.abc,321,Young Scottie,G,G,E,minor,0.811,9,RELATIVE
+maplewood.abc,325,Saddle The Pony **,Gmaj,G,E,minor,0.887,9,RELATIVE
+maplewood.abc,330,"Happy To Meet, Sorry To Part **",GMaj,G,E,minor,0.898,9,RELATIVE
+maplewood.abc,501,Paddy Carey,G,G,E,minor,0.818,9,RELATIVE
+maplewood.abc,502,"Valiant, The",Gmaj,G,E,minor,0.913,9,RELATIVE
+maplewood.abc,802,"Peacock Followed the Hen, The",Am,A,D,minor,0.929,5,SUBDOMINANT/MODAL
+maplewood.abc,803,KT98,G,G,D,major,0.902,7,MODAL
+maplewood.abc,911,Alunelul,D,D,B,minor,0.893,9,RELATIVE
+maplewood.abc,914,Halfe Hannikin (D),G,G,D,major,0.766,7,MODAL
+maplewood.abc,1001,"Jouets, Valse de",D,D,B,minor,0.883,9,RELATIVE
+maplewood.abc,1011,Valse-Clog Guilmette,Bmin,B,E,minor,0.787,5,SUBDOMINANT/MODAL
+maplewood.abc,1019,Mrs Casey **,Em,E,G,major,0.878,3,RELATIVE
+maplewood_other.abc,8,"Young Widow, The",G,G,D,major,0.863,7,MODAL
+maplewood_other.abc,28,Untitled Jig,D,D,B,minor,0.88,9,RELATIVE
+maplewood_other.abc,35,Going to the Well for Water,D,D,B,minor,0.916,9,RELATIVE
+maplewood_other.abc,36,Rory O'More,A,A,Gb,minor,0.837,9,RELATIVE
+maplewood_other.abc,39,Never Love Thee More,G,G,A,minor,0.865,2,TONE
+maplewood_other.abc,34,Alvan Batchelder's,G,G,E,minor,0.905,9,RELATIVE
+NEFR.abc,4,the Tempest,G,G,E,minor,0.939,9,RELATIVE
+NEFR.abc,10,Tenpenny Bit,ADor,A,D,major,0.72,5,SUBDOMINANT/MODAL
+NEFR.abc,17,Saddle the Pony,G,G,E,minor,0.886,9,RELATIVE
+NEFR.abc,23,"Happy to Meet, Sorry to Part",G,G,E,minor,0.907,9,RELATIVE
+NEFR.abc,27,Come Up The Back Stairs,G,G,E,minor,0.825,9,RELATIVE
+NEFR.abc,44,Rolling Off a Log,C,C,G,major,0.707,7,MODAL
+NEFR.abc,48,St. Patrick's Day in the Morning,G,G,E,minor,0.763,9,RELATIVE
+NEFR.abc,50,Maggie Brown's Favorite,G,G,E,minor,0.871,9,RELATIVE
+NEFR.abc,51,Swallowtail Jig,Em,E,B,minor,0.67,7,MODAL
+NEFR.abc,52,Portland Fancy,A,A,D,major,0.906,5,SUBDOMINANT/MODAL
+NEFR.abc,57,Finnegan's Wake,D,D,B,minor,0.813,9,RELATIVE
+NEFR.abc,69,Lardner's Reel,A,A,E,major,0.77,7,MODAL
+NEFR.abc,76,Paddy on the Turnpike,Gdor,G,D,minor,0.693,7,MODAL
+NEFR.abc,81,Fireman's Reel,A,A,Gb,minor,0.796,9,RELATIVE
+NEFR.abc,82,Ships Are Sailing,EDor,E,D,major,0.849,10,SUBTONE
+NEFR.abc,86,Far From Home,G,G,E,minor,0.844,9,RELATIVE
+NEFR.abc,87,Swinging on a Gate,G,G,E,minor,0.774,9,RELATIVE
+NEFR.abc,88,Teetolaler's Reel,G,G,E,minor,0.871,9,RELATIVE
+NEFR.abc,96,Chorus Jig,Dmix,D,G,major,0.867,5,SUBDOMINANT/MODAL
+NEFR.abc,106,Crooked Stovepipe,G,G,E,minor,0.908,9,RELATIVE
+NEFR.abc,111,Green Fields of America,G,G,E,minor,0.886,9,RELATIVE
+NEFR.abc,122,Flowers of Edinburgh,G,G,E,minor,0.839,9,RELATIVE
+NEFR.abc,124,Morning Star,G,G,E,minor,0.916,9,RELATIVE
+NEFR.abc,126,Pig Town Fling,G,G,E,minor,0.842,9,RELATIVE
+NEFR.abc,128,Swallowtail Reel,Am,A,C,major,0.787,3,RELATIVE
+NEFR.abc,132,Red Haired Boy,A,A,D,major,0.844,5,SUBDOMINANT/MODAL
+NEFR.abc,141,la Bastringe,D,D,B,minor,0.781,9,RELATIVE
+NEFR.abc,160,Set de la Baie St. Paul,D,D,B,minor,0.854,9,RELATIVE
+NEFR.abc,164,Reel de Montr\'eal,G,G,D,major,0.865,7,MODAL
+pgh_sets_tunebook.abc,8006,Horse's Brawl,G,G,E,minor,0.73,9,RELATIVE
+pgh_sets_tunebook.abc,18007,"Road to Lisdoonvarna, The",Edor,E,B,minor,0.862,7,MODAL
+pgh_sets_tunebook.abc,19033,Swallowtail Jig,Edor,E,B,minor,0.67,7,MODAL
+pgh_sets_tunebook.abc,16006,Portsmouth,G,G,E,minor,0.848,9,RELATIVE
+pgh_sets_tunebook.abc,14004,Newcastle,G,G,E,minor,0.781,9,RELATIVE
+pgh_sets_tunebook.abc,12005,"Lilting Banshee, The",Ador,A,E,minor,0.815,7,MODAL
+pgh_sets_tunebook.abc,7016,Goodby Dolly Gray,D,D,B,minor,0.678,9,RELATIVE
+pgh_sets_tunebook.abc,11010,Keep the Home Fires Burning,G,G,E,minor,0.848,9,RELATIVE
+pgh_sets_tunebook.abc,2020,Brighton Camp,G,G,E,minor,0.836,9,RELATIVE
+pgh_sets_tunebook.abc,4001,Danny Boy,C,C,A,minor,0.891,9,RELATIVE
+pgh_sets_tunebook.abc,2020,Brighton Camp,G,G,E,minor,0.836,9,RELATIVE
+pgh_sets_tunebook.abc,2020,Brighton Camp,F,F,D,minor,0.836,9,RELATIVE
+pgh_sets_tunebook.abc,18035,"Red Lark, The",G,G,E,minor,0.679,9,RELATIVE
+pgh_sets_tunebook.abc,7018,George Green's College Hornpipe,G,G,D,major,0.804,7,MODAL
+andy_cutting_tunes.abc,3,Lola Flexen,Eb,Eb,C,minor,0.845,9,RELATIVE
+andy_cutting_tunes.abc,3,Lola Flexen (G),Gmaj,G,E,minor,0.845,9,RELATIVE
+andy_cutting_tunes.abc,9,In Continental Mood,Cmaj,C,G,major,0.713,7,MODAL
+andy_cutting_tunes.abc,12,Round The Corner,Gmaj,G,A,minor,0.942,2,TONE
+andy_cutting_tunes.abc,14,Nue Pneus,Gmaj,G,E,minor,0.842,9,RELATIVE
+andy_cutting_tunes.abc,18,Waiting For Janet,Gmaj,G,A,minor,0.806,2,TONE
+andy_cutting_tunes.abc,26,Miss Lindsay Barker,G,G,E,minor,0.757,9,RELATIVE
+andy_cutting_tunes.abc,31,Mrs Casey,Em,E,G,major,0.88,3,RELATIVE
+andy_cutting_tunes.abc,147,"Italian Rant,An (Gm)",Bb,Bb,G,minor,0.932,9,RELATIVE
+andy_cutting_tunes.abc,148,"Italian Rant,An (Cm)",Ebmaj,Eb,C,minor,0.932,9,RELATIVE
+andy_cutting_tunes.abc,1,Two Beers,Emin,E,G,major,0.731,3,RELATIVE
+andy_cutting_tunes.abc,1,Cuckolds all a row,C,C,A,minor,0.882,9,RELATIVE
+andy_cutting_tunes.abc,576,The Old Queen,D,D,B,minor,0.851,9,RELATIVE
+andy_cutting_tunes.abc,179,Albert's Last Dance,G,G,E,minor,0.864,9,RELATIVE
+andy_cutting_tunes.abc,1,The Long Drive,G,G,A,minor,0.736,2,TONE
+andy_cutting_tunes.abc,3,At Halsy,G,G,E,minor,0.903,9,RELATIVE
+andy_cutting_tunes.abc,2,The History Man,Gmaj,G,E,minor,0.791,9,RELATIVE
+andy_cutting_tunes.abc,1,Isleworth Bridge,Gmaj,G,E,minor,0.94,9,RELATIVE
+andy_cutting_tunes.abc,1,Lady Grey,Emin,E,D,major,0.862,10,SUBTONE
+andy_cutting_tunes.abc,1,@ Halsway,G,G,E,minor,0.892,9,RELATIVE
+andy_cutting_tunes.abc,1,Knockdown,F,F,D,minor,0.878,9,RELATIVE
+andy_cutting_tunes.abc,43,Fergie - the true story,G,G,E,minor,0.862,9,RELATIVE

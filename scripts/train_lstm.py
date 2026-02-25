@@ -59,12 +59,15 @@ def main():
     parser.add_argument("--scale-degree-onehot",  action=argparse.BooleanOptionalAction, default=True,
                         help="One-hot encode scale degree (12-dim). Default: on. "
                              "Use --no-scale-degree-onehot for single normalised float.")
-    parser.add_argument("--target-type", choices=["absolute", "degree"], default="degree",
+    parser.add_argument("--target-type", choices=["absolute", "degree", "aggressive"],
+                        default="degree",
                         help="Chord label space for training. "
-                             "'degree' (default) = Roman-numeral degrees relative to key "
-                             "(I, ii, V7 etc.) — ~14-20 universal classes, key-invariant. "
-                             "'absolute' = raw chord names (G, Am, A7 etc.) — ~35 classes.")
-    parser.add_argument("--target-mode", choices=["absolute", "degree"], default=None,
+                             "'degree' (default) = Roman-numeral degrees (~33 classes). "
+                             "'aggressive' = 7 functional super-classes "
+                             "(I, i, V, IV, bVII, bIII, N.C.) — best for small datasets. "
+                             "'absolute' = raw chord names — ~35 classes.")
+    parser.add_argument("--target-mode",
+                        choices=["absolute", "degree", "aggressive"], default=None,
                         help="Alias for --target-type.")
     parser.add_argument("--relaxed", action=argparse.BooleanOptionalAction, default=True,
                         help="Relaxed chord simplification (default: on). "
@@ -90,6 +93,7 @@ def main():
         _iter_scores_from_abc,
         print_chord_mapping_trace,
         chord_to_degree,
+        apply_super_class,
         set_relaxed_mode,
     )
     from src.training_data import tune_has_chords
@@ -139,16 +143,18 @@ def main():
     # Emit the first-100-events mapping trace now that all scores have been parsed
     print_chord_mapping_trace()
 
-    # ── Degree-mode label conversion ─────────────────────────────────────────
-    # If --target-type degree: remap every target_chord to its Roman-numeral
-    # degree relative to the tune's key tonic.  key_tonic_pc is stored in each
-    # feature dict by _extract_features_from_score.
-    if args.target_type == "degree":
+    # ── Label conversion ──────────────────────────────────────────────────────
+    if args.target_type in ("degree", "aggressive"):
         for tune in train_tunes + val_tunes:
             for row in tune:
                 tpc = row.get("key_tonic_pc", 2)
-                row["target_chord"] = chord_to_degree(row["target_chord"], tpc)
-        print("[degree mode] Converted target chords → Roman-numeral degrees.")
+                deg = chord_to_degree(row["target_chord"], tpc)
+                if args.target_type == "aggressive":
+                    deg = apply_super_class(deg)
+                row["target_chord"] = deg
+        mode_label = ("Roman-numeral degrees" if args.target_type == "degree"
+                      else "functional super-classes (I/i/V/IV/bVII/bIII)")
+        print(f"[{args.target_type} mode] Converted target chords → {mode_label}.")
 
     print(f"Split: {len(train_scores)} train tunes → {len(train_tunes)} sequences | "
           f"{len(val_scores)} val tunes → {len(val_tunes)} sequences")
@@ -208,7 +214,8 @@ def main():
     print(f"Model: {args.layers}-layer {bidir_tag} LSTM, hidden={args.hidden}, "
           f"dropout={args.dropout}, wd={args.weight_decay}, "
           f"scale_degree={sd_tag}, input_dim={input_dim}, "
-          f"target={args.target_type}/{relax_tag} ({num_classes} classes)")
+          f"target={args.target_type}/{relax_tag} ({num_classes} classes)  "
+          + ("← 7 super-classes" if args.target_type == "aggressive" else ""))
 
     pad_idx = vocab.label_to_idx[ChordVocabulary.PAD]
     criterion = torch.nn.CrossEntropyLoss(

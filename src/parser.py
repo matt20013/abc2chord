@@ -147,6 +147,57 @@ def map_chord_to_degree(chord_label: str, key_context) -> str:
     return chord_to_degree(chord_label, tonic_pc)
 
 
+# ── Aggressive "Super-Class" collapse ────────────────────────────────────────
+# Maps 33 raw degree strings → 7 functional super-classes.
+# Designed for folk/Celtic music where harmonic function > exact voicing.
+#
+# Super-classes:
+#   I    — tonic major home base
+#   i    — minor / sub-tonic family  (ii, iii, vi, bii merged in)
+#   V    — dominant "pull"           (V7, v, II7, bv, vii merged in)
+#   IV   — subdominant departure     (IV7, iv merged in)
+#   bVII — modal flat-seven          (folk / Celtic sound)
+#   bIII — modal flat-three          (romantic / modern folk shifts)
+#   N.C. — no chord (unchanged)
+#
+# Degrees absent from this map are left unchanged; they will be very rare
+# (<15 tokens each) and the vocabulary builder will assign them <UNK>.
+_AGGRESSIVE_MAP: dict[str, str] = {
+    # Tonic major
+    "I":      "I",   "I7":    "I",   "II":   "I",   "III":  "I",
+    # Minor / sub-tonic family
+    "i":      "i",   "ii":    "i",   "iii":  "i",   "vi":   "i",
+    "bii":    "i",   "bvi":   "i",   "VI7":  "i",   "VI":   "i",
+    "VIdim":  "i",   "bIIdim":"i",   "bII":  "i",
+    # Dominant function
+    "V":      "V",   "V7":    "V",   "v":    "V",   "bv":   "V",
+    "II7":    "V",   "III7":  "V",   "vii":  "V",   "Vaug": "V",
+    # Subdominant
+    "IV":     "IV",  "IV7":   "IV",  "iv":   "IV",
+    # Modal flat-seven
+    "bVII":   "bVII", "bVII7": "bVII", "VII7": "bVII", "VIIaug": "bVII",
+    # Modal flat-three
+    "bIII":   "bIII", "bVI":  "bIII", "bVI7": "bIII",
+    # Pass-through
+    "N.C.":   "N.C.",
+}
+
+
+def apply_super_class(degree: str) -> str:
+    """Collapse a Roman-numeral degree string to its functional super-class.
+
+    Uses _AGGRESSIVE_MAP.  Degrees not in the map are returned unchanged
+    (they will be very rare and fall through to <UNK> at inference time).
+
+    Examples:
+        apply_super_class("V7")   →  "V"
+        apply_super_class("ii")   →  "i"
+        apply_super_class("bVII") →  "bVII"
+        apply_super_class("bvi")  →  "i"
+    """
+    return _AGGRESSIVE_MAP.get(degree, degree)
+
+
 # Shorter alias for internal pipeline use.
 map_to_degree = chord_to_degree
 
@@ -369,7 +420,11 @@ def print_chord_mapping_trace() -> None:
 
 
 def _get_key_info(score) -> tuple[int, str]:
-    """Return (tonic_pitch_class 0-11, human-readable key label) for the score."""
+    """Return (tonic_pitch_class 0-11, human-readable key label) for the score.
+
+    Uses only the FIRST key object so callers that don't need per-note tracking
+    still get a simple single value (backward-compatible).
+    """
     flat = score.flatten()
     key_objs = list(flat.getElementsByClass(music21.key.Key))
     if key_objs:
@@ -383,6 +438,52 @@ def _get_key_info(score) -> tuple[int, str]:
         except Exception:
             pass
     return 2, "D major (default)"  # most common in Irish / folk
+
+
+def _get_key_timeline(score) -> list[tuple[float, int, str]]:
+    """Return [(offset, tonic_pc, label), …] for every key change in the score.
+
+    When patch_key_changes.py has injected an inline [K:X] at a section
+    boundary, music21 places an additional Key object at the corresponding
+    offset.  Sorting by offset lets _active_key_at() walk the timeline and
+    return the correct local key for any given note offset.
+
+    Falls back to the initial key / default when no Key objects exist.
+    """
+    flat     = score.flatten()
+    key_objs = list(flat.getElementsByClass(music21.key.Key))
+    if key_objs:
+        return [
+            (float(k.offset), k.tonic.pitchClass, f"{k.tonic.name} {k.mode}")
+            for k in sorted(key_objs, key=lambda k: k.offset)
+        ]
+    # No Key objects: try KeySignature and fall back to default
+    key_sigs = list(flat.getElementsByClass(music21.key.KeySignature))
+    if key_sigs:
+        try:
+            k = key_sigs[0].asKey()
+            return [(0.0, k.tonic.pitchClass, f"{k.tonic.name} {k.mode}")]
+        except Exception:
+            pass
+    return [(0.0, 2, "D major (default)")]
+
+
+def _active_key_at(
+    timeline: list[tuple[float, int, str]],
+    offset: float,
+) -> tuple[int, str]:
+    """Return (tonic_pc, label) for the most recent key change at or before offset.
+
+    Walks the pre-sorted timeline linearly; stops as soon as a future key is
+    encountered so the last valid entry is returned.
+    """
+    tpc, label = timeline[0][1], timeline[0][2]
+    for t, p, lbl in timeline:
+        if t <= offset:
+            tpc, label = p, lbl
+        else:
+            break
+    return tpc, label
 
 
 def _get_meter_numerator(score) -> int:
@@ -447,9 +548,13 @@ def _extract_features_from_score(score):
         chords = score.chordify().flatten().getElementsByClass(music21.harmony.ChordSymbol)
     chords = sorted(chords, key=lambda x: x.offset)
 
-    tonic_pc, key_label = _get_key_info(score)
-    meter_num  = _get_meter_numerator(score)
-    meter_norm = min(meter_num, _METER_NUM_MAX) / _METER_NUM_MAX
+    # Build the full key timeline for this score.  If patch_key_changes.py has
+    # injected an inline [K:X] at a section boundary, music21 will have placed
+    # an additional Key object at that offset, and notes in the B-part will
+    # automatically receive the correct local tonic.
+    key_timeline = _get_key_timeline(score)
+    meter_num    = _get_meter_numerator(score)
+    meter_norm   = min(meter_num, _METER_NUM_MAX) / _METER_NUM_MAX
 
     dataset = []
     for n in melody.notesAndRests:
@@ -461,13 +566,16 @@ def _extract_features_from_score(score):
             else:
                 break
         if current_best_chord:
-            raw_chord = current_best_chord.figure
+            raw_chord    = current_best_chord.figure
             active_chord = simplify_chord_label(raw_chord, relaxed=_RELAXED_MODE)
             # Accumulate mapping trace (raw → simplified) until limit reached
             if len(_TRACE_EVENTS) < _TRACE_LIMIT:
                 _TRACE_EVENTS.append((raw_chord, active_chord))
 
         if n.isNote:
+            # Use the locally-active key at this note's offset so that
+            # B-part notes after an injected [K:X] use the new tonic.
+            tonic_pc, key_label = _active_key_at(key_timeline, float(n.offset))
             scale_degree = (n.pitch.pitchClass - tonic_pc) % 12  # 0-11
             dataset.append({
                 "pitch":        n.pitch.ps,
@@ -477,11 +585,11 @@ def _extract_features_from_score(score):
                 "is_rest":      0,
                 "scale_degree": scale_degree,
                 "meter_norm":   meter_norm,
-                "key_tonic_pc": tonic_pc,    # stored for degree-mode conversion
+                "key_tonic_pc": tonic_pc,    # per-note local tonic for degree mode
                 "key_label":    key_label,   # human-readable key for display
                 "target_chord": active_chord,
             })
-    _print_scale_degree_debug(dataset, key_label)
+    _print_scale_degree_debug(dataset, key_timeline[0][2])
     return dataset
 
 
