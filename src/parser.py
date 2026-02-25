@@ -21,21 +21,31 @@ _SD_INTERVAL_NAMES = [
 ]
 
 
+# Enharmonic map: normalise all sharp roots to their flat equivalents so the
+# model learns one chord class per pitch regardless of notation choice.
+# Applied after title-casing, before extension collapsing.
+_ENHARMONIC_MAP = {
+    "A#": "Bb", "C#": "Db", "D#": "Eb", "F#": "Gb", "G#": "Ab",
+}
+
+
 def simplify_chord_label(chord_str: str) -> str:
     """
     Normalise a raw chord label to a compact, consistent vocabulary.
 
     Rules (applied in order):
-      1. Pass through sentinel values (N.C., empty).
-      2. Strip slash-bass inversions  (G/B → G, D/F# → D).
-      3. Fix ABC dash-minor notation  (B- → Bm, E- → Em, A- → Am).
-      4. Title-case the root letter   (bm → Bm, dm → Dm).
-      5. Collapse complex extensions:
-           minor extensions  m7 / m9 / m11 / m13      → plain minor  (Cm7 → Cm)
-           major extensions  maj7 / maj9 / add9 / sus  → plain major  (Dmaj7 → D)
-           dominant 7ths     7 / 9 / 11 / 13           → keeps 7      (A9 → A7)
-           diminished vars   dim7 / o / o7             → dim          (Bdim7 → Bdim)
-           augmented vars    aug / +                   → aug          (C#+ → C#aug)
+      0. Strip parentheses            (F) → F
+      1. Strip slash-bass             G/B → G, D/F# → D
+      2a. Fix ABC dash-flat root      B-m → Bbm, E-7 → Eb7  (dash = flat in compound)
+      2b. Fix ABC dash-minor (EOL)    B-  → Bm              (dash = minor at end)
+      3. Title-case root letter       bm  → Bm, dm → Dm
+      4. Enharmonic normalisation     A#→Bb, C#→Db, D#→Eb, F#→Gb, G#→Ab
+      5. Collapse extensions:
+           m / m7 / m9               → plain minor  (Cm7→Cm)
+           maj7 / add9 / sus4        → plain major  (Dmaj7→D)
+           7 / 9 / 11 / 13           → dominant 7   (A9→A7)
+           dim / dim7 / o / o7       → dim          (Bdim7→Bdim)
+           aug / +                   → aug          (C#+→Cbaug via step 4, or Dbaug)
     Preserved distinctions: Major, Minor (m), Dominant 7 (7), dim, aug.
     """
     if not chord_str or chord_str == "N.C.":
@@ -51,12 +61,21 @@ def simplify_chord_label(chord_str: str) -> str:
     # 1. Strip slash-bass (take everything before the first '/')
     c = c.split("/")[0]
 
-    # 2. Fix ABC dash-minor: letter + optional accidental + literal '-' at end-of-string
-    c = re.sub(r"^([A-Ga-g][b#]?)-$", lambda m: m.group(1) + "m", c)
+    # 2a. Fix ABC dash-flat in compound chords: letter + '-' + more chars
+    #     e.g.  B-m → Bbm   E-7 → Eb7   B-dim → Bbdim
+    c = re.sub(r"^([A-Ga-g])-(\S)", lambda m: m.group(1) + "b" + m.group(2), c)
+
+    # 2b. Fix ABC dash-minor at end-of-string: B- → Bm  (also catches Bb- → Bbm)
+    c = re.sub(r"^([A-Ga-g][b]?)-$", lambda m: m.group(1) + "m", c)
 
     # 3. Title-case root letter
     if c:
         c = c[0].upper() + c[1:]
+
+    # 4. Enharmonic normalisation — map sharp roots to flat equivalents
+    #    Check two-char root first (e.g. "A#") before one-char
+    if len(c) >= 2 and c[:2] in _ENHARMONIC_MAP:
+        c = _ENHARMONIC_MAP[c[:2]] + c[2:]
 
     # Parse root (note letter + optional accidental b/#)
     root_match = re.match(r"^([A-G][b#]?)", c)
