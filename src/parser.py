@@ -12,6 +12,14 @@ _TRACE_EVENTS: list[tuple[str, str]] = []
 _TRACE_LIMIT = 100
 _TRACE_PRINTED = False
 
+# Scale-degree validation: printed once for the first tune that has a chord.
+_SD_DEBUG_DONE = False
+_SD_INTERVAL_NAMES = [
+    "Tonic (1)", "b2", "Maj 2nd", "b3", "Maj 3rd",
+    "P4",        "b5", "P5",      "b6", "Maj 6th",
+    "b7",        "Maj 7th",
+]
+
 
 def simplify_chord_label(chord_str: str) -> str:
     """
@@ -101,19 +109,21 @@ def print_chord_mapping_trace() -> None:
     print("────────────────────────────────────────────────────────────────────\n")
 
 
-def _get_tonic_pc(score) -> int:
-    """Return the tonic pitch class (0-11) of the score's key, defaulting to D (2)."""
+def _get_key_info(score) -> tuple[int, str]:
+    """Return (tonic_pitch_class 0-11, human-readable key label) for the score."""
     flat = score.flatten()
     key_objs = list(flat.getElementsByClass(music21.key.Key))
     if key_objs:
-        return key_objs[0].tonic.pitchClass
+        k = key_objs[0]
+        return k.tonic.pitchClass, f"{k.tonic.name} {k.mode}"
     key_sigs = list(flat.getElementsByClass(music21.key.KeySignature))
     if key_sigs:
         try:
-            return key_sigs[0].asKey().tonic.pitchClass
+            k = key_sigs[0].asKey()
+            return k.tonic.pitchClass, f"{k.tonic.name} {k.mode}"
         except Exception:
             pass
-    return 2  # default: D (most common in Irish / folk)
+    return 2, "D major (default)"  # most common in Irish / folk
 
 
 def _get_meter_numerator(score) -> int:
@@ -126,6 +136,34 @@ def _get_meter_numerator(score) -> int:
 
 # Largest meter numerator we expect (12/8); used for normalization.
 _METER_NUM_MAX = 12.0
+
+
+def _print_scale_degree_debug(notes: list, key_label: str) -> None:
+    """Print a one-time validation table: Original Pitch → Key → Scale Degree."""
+    global _SD_DEBUG_DONE
+    if _SD_DEBUG_DONE:
+        return
+    # Only trigger on a tune that actually has chord annotations.
+    if not any(r["target_chord"] != "N.C." for r in notes):
+        return
+    _SD_DEBUG_DONE = True
+    print("\n── Scale Degree Validation (first annotated tune) ──────────────────")
+    print(f"   Key detected : {key_label}")
+    print(f"   {'Note':<7} {'MIDI':>5}  {'formula':^18}  {'Degree':>6}  Interval")
+    print(f"   {'─'*7}  {'─'*5}  {'─'*18}  {'─'*6}  {'─'*14}")
+    tonic_pc = None
+    for row in notes[:12]:
+        midi    = int(row["pitch"])
+        sd      = int(row["scale_degree"])
+        if tonic_pc is None:
+            tonic_pc = (midi - sd) % 12  # back-calculate for display
+        pitch_obj  = music21.pitch.Pitch(midi)
+        note_name  = pitch_obj.nameWithOctave
+        formula    = f"({midi} - {(midi - sd) % 12 + (midi // 12) * 12 - (midi % 12 - (midi % 12))}) % 12"
+        formula    = f"({midi} - tonic) % 12"
+        interval   = _SD_INTERVAL_NAMES[sd]
+        print(f"   {note_name:<7}  {midi:>5}  {formula:^18}  {sd:>6}  {interval}")
+    print("────────────────────────────────────────────────────────────────────\n")
 
 
 def _extract_features_from_score(score):
@@ -150,7 +188,7 @@ def _extract_features_from_score(score):
         chords = score.chordify().flatten().getElementsByClass(music21.harmony.ChordSymbol)
     chords = sorted(chords, key=lambda x: x.offset)
 
-    tonic_pc   = _get_tonic_pc(score)
+    tonic_pc, key_label = _get_key_info(score)
     meter_num  = _get_meter_numerator(score)
     meter_norm = min(meter_num, _METER_NUM_MAX) / _METER_NUM_MAX
 
@@ -182,6 +220,7 @@ def _extract_features_from_score(score):
                 "meter_norm":   meter_norm,
                 "target_chord": active_chord,
             })
+    _print_scale_degree_debug(dataset, key_label)
     return dataset
 
 

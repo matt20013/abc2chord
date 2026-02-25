@@ -26,7 +26,7 @@ from src.model import (
     eval_epoch,
     collate_padded,
     TORCH_AVAILABLE,
-    INPUT_DIM,
+    get_input_dim,
 )
 
 try:
@@ -49,8 +49,11 @@ def main():
     parser.add_argument("--out",          type=str,   default="checkpoints")
     parser.add_argument("--abc-paths",    nargs="*",  default=None, help="ABC files (default: training set)")
     parser.add_argument("--augment-keys", action="store_true", help="Transpose every tune into all 12 keys")
-    parser.add_argument("--bidirectional",    action=argparse.BooleanOptionalAction, default=True,
+    parser.add_argument("--bidirectional",        action=argparse.BooleanOptionalAction, default=True,
                         help="Bidirectional LSTM (default: on; use --no-bidirectional to disable)")
+    parser.add_argument("--scale-degree-onehot",  action=argparse.BooleanOptionalAction, default=True,
+                        help="One-hot encode scale degree (12-dim). Default: on. "
+                             "Use --no-scale-degree-onehot for single normalised float.")
     args = parser.parse_args()
 
     if not TORCH_AVAILABLE or torch is None:
@@ -132,10 +135,15 @@ def main():
         device = torch.device("cpu")
     print(f"Using device: {device}")
 
+    sd_onehot = args.scale_degree_onehot
+    input_dim = get_input_dim(sd_onehot)
+
     # ── Datasets & loaders ──────────────────────────────────────────────────
-    train_dataset = ChordSequenceDataset(train_tunes, vocab, normalize=True)
-    val_dataset   = ChordSequenceDataset(val_tunes,   vocab,
-                                         max_len=train_dataset.max_len, normalize=True)
+    train_dataset = ChordSequenceDataset(train_tunes, vocab, normalize=True,
+                                         one_hot_scale_degree=sd_onehot)
+    val_dataset   = ChordSequenceDataset(val_tunes, vocab,
+                                         max_len=train_dataset.max_len, normalize=True,
+                                         one_hot_scale_degree=sd_onehot)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=min(args.batch_size, len(train_dataset)),
@@ -151,7 +159,7 @@ def main():
 
     # ── Model ────────────────────────────────────────────────────────────────
     model = LSTMChordModel(
-        input_dim=INPUT_DIM,
+        input_dim=input_dim,
         hidden_dim=args.hidden,
         num_layers=args.layers,
         num_classes=num_classes,
@@ -159,7 +167,9 @@ def main():
         bidirectional=args.bidirectional,
     ).to(device)
     bidir_tag = "bidirectional" if args.bidirectional else "unidirectional"
-    print(f"Model: {args.layers}-layer {bidir_tag} LSTM, hidden={args.hidden}, dropout=0.3")
+    sd_tag = "onehot-12" if sd_onehot else "scalar"
+    print(f"Model: {args.layers}-layer {bidir_tag} LSTM, hidden={args.hidden}, "
+          f"dropout=0.3, scale_degree={sd_tag}, input_dim={input_dim}")
 
     pad_idx = vocab.label_to_idx[ChordVocabulary.PAD]
     criterion = torch.nn.CrossEntropyLoss(
@@ -176,9 +186,10 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     vocab.save(os.path.join(args.out, "chord_vocab.json"))
     model_config = {
-        "input_dim": INPUT_DIM, "hidden_dim": args.hidden,
+        "input_dim": input_dim, "hidden_dim": args.hidden,
         "num_layers": args.layers, "num_classes": num_classes,
         "dropout": 0.3, "bidirectional": args.bidirectional,
+        "one_hot_scale_degree": sd_onehot,
     }
     with open(os.path.join(args.out, "model_config.json"), "w") as f:
         json.dump(model_config, f, indent=2)

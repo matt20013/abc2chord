@@ -14,19 +14,28 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-# Feature keys consumed from each note dict (order defines the model's input vector).
-# pitch        – MIDI semitone
-# duration     – quarter-length duration
-# beat         – beat position within bar
-# measure      – measure number
-# is_rest      – 0/1 flag (always 0 for notes; reserved for future rest-handling)
-# scale_degree – chromatic interval above key tonic (0-11), captures modal context
-# meter_norm   – time-sig numerator / 12, distinguishes jig / reel / polka / waltz
-FEATURE_KEYS = [
-    "pitch", "duration", "beat", "measure", "is_rest",
-    "scale_degree", "meter_norm",
-]
-INPUT_DIM = len(FEATURE_KEYS)  # single source of truth; currently 7
+# ── Feature layout ────────────────────────────────────────────────────────────
+# Base features (always 6):
+#   pitch, duration, beat, measure, is_rest, meter_norm
+# Scale-degree block (inserted between is_rest and meter_norm):
+#   one-hot mode  → 12 floats  [sd_0 … sd_11]   INPUT_DIM = 18  (default)
+#   scalar mode   →  1 float   [sd_norm]         INPUT_DIM =  7
+#
+# One-hot is preferred: the LSTM sees each degree as categorically distinct,
+# not numerically close.  Use get_input_dim() everywhere instead of a literal.
+_BASE_FEATURE_KEYS  = ["pitch", "duration", "beat", "measure", "is_rest"]
+_BASE_FEATURE_DIM   = len(_BASE_FEATURE_KEYS)   # 5  (meter_norm appended after SD)
+_SD_KEYS_ONEHOT     = [f"sd_{i}" for i in range(12)]
+_SD_KEYS_SCALAR     = ["scale_degree_norm"]
+
+
+def get_input_dim(one_hot_scale_degree: bool = True) -> int:
+    """Return the feature-vector length for the chosen scale-degree encoding."""
+    sd_dim = 12 if one_hot_scale_degree else 1
+    return _BASE_FEATURE_DIM + sd_dim + 1   # +1 for meter_norm
+
+
+INPUT_DIM = get_input_dim(one_hot_scale_degree=True)   # = 18
 
 # Pitch is MIDI 0–127; we normalize. Beat/measure can be large; we'll normalize per tune or clip.
 PITCH_MIN, PITCH_MAX = 21, 108  # rough piano range
@@ -90,13 +99,17 @@ _SCALE_DEG_MAX   = 11.0   # chromatic degrees 0-11
 _METER_NUM_MAX   = 12.0   # largest expected time-sig numerator (12/8)
 
 
-def tune_to_arrays(tune, vocab=None, normalize=True):
+def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True):
     """Convert one tune (list of feature dicts) to (features, chord_indices).
 
-    Output feature order matches FEATURE_KEYS:
-        [pitch, duration, beat, measure, is_rest, scale_degree, meter_norm]
-    Older dicts (without scale_degree / meter_norm) fall back to sensible
-    defaults so pre-existing checkpoints and tests remain loadable.
+    Feature vector layout:
+        one_hot_scale_degree=True  (default, INPUT_DIM=18):
+            [pitch, dur, beat, meas, is_rest, sd_0…sd_11, meter_norm]
+        one_hot_scale_degree=False (scalar,  INPUT_DIM=7):
+            [pitch, dur, beat, meas, is_rest, sd_norm,    meter_norm]
+
+    Dicts without scale_degree / meter_norm fall back to sensible defaults
+    so older data remains loadable.
     """
     features = []
     chords = []
@@ -107,23 +120,21 @@ def tune_to_arrays(tune, vocab=None, normalize=True):
             dur  = min(float(row["duration"]), _DURATION_MAX) / _DURATION_MAX
             beat = max(0.0, min(1.0, (float(row["beat"]) - 1.0) / (_BEAT_MAX - 1.0)))
             meas = min(float(row["measure"]), _MEASURE_MAX) / _MEASURE_MAX
-            sdeg = row.get("scale_degree", 0) / _SCALE_DEG_MAX   # 0-11 → 0-1
-            mtr  = float(row.get("meter_norm", 4.0 / _METER_NUM_MAX))  # default 4/4
+            mtr  = float(row.get("meter_norm", 4.0 / _METER_NUM_MAX))
         else:
             dur  = float(row["duration"])
             beat = float(row["beat"])
             meas = float(row["measure"])
-            sdeg = float(row.get("scale_degree", 0))
             mtr  = float(row.get("meter_norm", 4.0 / _METER_NUM_MAX))
-        features.append([
-            p,
-            dur,
-            beat,
-            meas,
-            float(row["is_rest"]),
-            sdeg,
-            mtr,
-        ])
+
+        sd_raw = int(row.get("scale_degree", 0)) % 12
+        if one_hot_scale_degree:
+            sd_vec = [0.0] * 12
+            sd_vec[sd_raw] = 1.0
+        else:
+            sd_vec = [sd_raw / _SCALE_DEG_MAX]
+
+        features.append([p, dur, beat, meas, float(row["is_rest"])] + sd_vec + [mtr])
         chords.append(row["target_chord"])
 
     X = np.array(features, dtype=np.float32)
@@ -136,13 +147,16 @@ def tune_to_arrays(tune, vocab=None, normalize=True):
 class ChordSequenceDataset(Dataset):
     """Dataset of (padded) note sequences and chord labels for LSTM."""
 
-    def __init__(self, tunes, vocab, max_len=None, normalize=True):
+    def __init__(self, tunes, vocab, max_len=None, normalize=True,
+                 one_hot_scale_degree=True):
         self.vocab = vocab
         self.normalize = normalize
+        self.one_hot_scale_degree = one_hot_scale_degree
         self.tunes = []
         self.lengths = []
         for tune in tunes:
-            X, y = tune_to_arrays(tune, vocab=vocab, normalize=normalize)
+            X, y = tune_to_arrays(tune, vocab=vocab, normalize=normalize,
+                                  one_hot_scale_degree=one_hot_scale_degree)
             if len(X) == 0:
                 continue
             self.tunes.append((X, y))
