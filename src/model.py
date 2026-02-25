@@ -105,7 +105,7 @@ _SCALE_DEG_MAX   = 11.0   # chromatic degrees 0-11
 _METER_NUM_MAX   = 12.0   # largest expected time-sig numerator (12/8)
 
 
-def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True):
+def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True, hierarchical=False):
     """Convert one tune (list of feature dicts) to (features, chord_indices).
 
     Absolute pitch is excluded; scale degree encodes melodic function in a
@@ -146,7 +146,7 @@ def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True):
         # New target encoding
         chord_str = row.get("target_chord")
         key_tonic = row.get("key_tonic_pc", 0) # Default to C if missing
-        target_vec = encode_chord_to_target(chord_str, key_tonic)
+        target_vec = encode_chord_to_target(chord_str, key_tonic, hierarchical=hierarchical)
         targets.append(target_vec)
 
     X = np.array(features, dtype=np.float32)
@@ -159,7 +159,7 @@ class ChordSequenceDataset(Dataset):
     """Dataset of (padded) note sequences and chord labels for LSTM."""
 
     def __init__(self, tunes, vocab=None, max_len=None, normalize=True,
-                 one_hot_scale_degree=True):
+                 one_hot_scale_degree=True, hierarchical=False):
         self.vocab = vocab
         self.normalize = normalize
         self.one_hot_scale_degree = one_hot_scale_degree
@@ -167,7 +167,7 @@ class ChordSequenceDataset(Dataset):
         self.lengths = []
         for tune in tunes:
             X, y = tune_to_arrays(tune, vocab=vocab, normalize=normalize,
-                                  one_hot_scale_degree=one_hot_scale_degree)
+                                  one_hot_scale_degree=one_hot_scale_degree, hierarchical=hierarchical)
             if len(X) == 0:
                 continue
             self.tunes.append((X, y))
@@ -358,12 +358,12 @@ def load_model_and_vocab(checkpoint_dir, device=None):
     return model, vocab
 
 
-def predict_chords_from_tune(model, tune, vocab, device=None, normalize=True):
+def predict_chords_from_tune(model, tune, vocab, device=None, normalize=True, hierarchical=False):
     """
     Predict chord labels for one tune (list of feature dicts from parser).
     Returns a list of chord label strings, one per note.
     """
-    X, _ = tune_to_arrays(tune, vocab=None, normalize=normalize)
+    X, _ = tune_to_arrays(tune, vocab=None, normalize=normalize, hierarchical=hierarchical)
     if len(X) == 0:
         return []
     lengths = len(X)
@@ -378,7 +378,7 @@ def predict_chords_from_tune(model, tune, vocab, device=None, normalize=True):
         prob_vec = 1.0 / (1.0 + np.exp(-logit_vec))
 
         key_tonic = row.get("key_tonic_pc", 0)
-        chord_str = decode_target_to_chord(prob_vec, key_tonic)
+        chord_str = decode_target_to_chord(prob_vec, key_tonic, hierarchical=hierarchical)
         labels.append(chord_str)
 
     return labels

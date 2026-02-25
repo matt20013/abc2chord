@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from src.chord_encoding import encode_chord_to_target, decode_target_to_chord, _CHORD_TEMPLATES
+from src.chord_encoding import encode_chord_to_target, decode_target_to_chord
 
 class TestChordEncoding(unittest.TestCase):
     def test_encode_simple(self):

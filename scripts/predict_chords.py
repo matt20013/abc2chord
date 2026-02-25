@@ -13,6 +13,7 @@ import sys
 import numpy as np
 import torch
 import music21
+import json
 
 # Ensure src module is importable for utilities
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,6 +43,14 @@ def main():
     
     model, vocab = load_model_and_vocab(checkpoint_dir, device=device)
     
+    # Load hierarchical setting from config
+    hierarchical = False
+    config_path = os.path.join(checkpoint_dir, "model_config.json")
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            cfg = json.load(f)
+            hierarchical = cfg.get("hierarchical_targets", False)
+
     # 2. Parse ABC
     print(f"Parsing {args.abc_file}...", file=sys.stderr)
     try:
@@ -70,7 +79,7 @@ def main():
         prob_vec = 1.0 / (1.0 + np.exp(-logit_vec))
         
         key_tonic = row.get("key_tonic_pc", 0)
-        chord_str = decode_target_to_chord(prob_vec, key_tonic)
+        chord_str = decode_target_to_chord(prob_vec, key_tonic, hierarchical=hierarchical)
         predictions.append(chord_str)
 
     # 5. Majority Vote per Measure
