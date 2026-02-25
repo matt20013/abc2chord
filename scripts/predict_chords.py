@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
-scripts/predict_chords.py — Inference script for Degree-based LSTM model.
-
-Loads a trained model and vocabulary, parses an ABC file, splits it into sections
-(A-part, B-part), estimates the key for each section, and predicts chords.
+scripts/predict_chords.py — Fixed inference script for Degree-based LSTM model.
+Now supports one-hot scale degrees and ABC chord injection.
 """
 
 import argparse
@@ -11,339 +9,212 @@ import collections
 import json
 import os
 import sys
+import re
 
 import music21
-import numpy as np
 import torch
+import torch.nn as nn
 
-# Ensure src module is importable
+# Ensure src module is importable for utilities
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
-from src.model import load_model_and_vocab, tune_to_arrays, predict_chords
-from src.parser import _extract_features_from_score, degree_to_chord
+# Import necessary utilities from your existing source
+try:
+    from src.model import tune_to_arrays, predict_chords
+    from src.parser import _extract_features_from_score, degree_to_chord
+except ImportError:
+    print("Error: Could not find 'src' directory. Ensure you are running from the project root.")
+    sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# 1. Structure Analysis & Key Estimation
+# 1. Corrected Model Definition
 # ---------------------------------------------------------------------------
 
-Section = collections.namedtuple("Section", ["start", "end", "key_obj", "index"])
+class LSTMChordModel(nn.Module):
+    def __init__(self, vocab_size, hidden_dim=32, n_layers=2, dropout=0.5, 
+                 one_hot_scale_degree=True): # <--- THE FIX
+        super(LSTMChordModel, self).__init__()
+        
+        # If one-hot, dim is 12 (notes) + 5 (rhythm) = 17
+        # If integer, dim is 1 (note) + 5 (rhythm) = 6
+        self.input_dim = 17 if one_hot_scale_degree else 6
+        
+        self.lstm = nn.LSTM(
+            self.input_dim, 
+            hidden_dim, 
+            n_layers, 
+            batch_first=True, 
+            dropout=dropout, 
+            bidirectional=True
+        )
+        self.fc = nn.Linear(hidden_dim * 2, vocab_size)
 
-def analyze_structure(score) -> list[Section]:
-    """
-    Split score into sections based on repeat boundaries and analyze key for each.
-    Returns a list of Section objects.
-    """
-    # Use the first part if available (melody), otherwise flatten the whole score
-    if hasattr(score, "parts") and score.parts:
-        flat = score.parts[0].flatten()
-    else:
-        flat = score.flatten()
+    def forward(self, x, lengths):
+        packed_x = nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False)
+        packed_out, _ = self.lstm(packed_x)
+        out, _ = nn.utils.rnn.pad_packed_sequence(packed_out, batch_first=True)
+        return self.fc(out)
 
-    duration = flat.duration.quarterLength
+def load_fixed_model(checkpoint_path, device):
+    """Loads model using the specific filenames found in your checkpoints folder."""
+    base_dir = os.path.dirname(checkpoint_path)
+    if not base_dir:
+        base_dir = "."
+    
+    # 1. Load Vocab (Using your specific filename: chord_vocab.json)
+    vocab_path = os.path.join(base_dir, "chord_vocab.json")
+    if not os.path.exists(vocab_path):
+        # Fallback to parent dir if running from a specific checkpoint file
+        vocab_path = os.path.join(os.path.dirname(base_dir), "chord_vocab.json")
+        
+    if not os.path.exists(vocab_path):
+        raise FileNotFoundError(f"Required vocab file 'chord_vocab.json' not found in {base_dir}")
+    
+    with open(vocab_path, 'r') as f:
+        vocab = json.load(f)
 
+    # 2. Load Config
+    config_path = os.path.join(base_dir, "model_config.json")
+    config = {}
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+
+    # 3. Load Checkpoint
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Instantiate Model with corrected parameters
+    model = LSTMChordModel(
+        vocab_size=len(vocab),
+        hidden_dim=config.get('hidden_dim', 32),
+        n_layers=config.get('n_layers', 2),
+        one_hot_scale_degree=config.get('one_hot_scale_degree', True) 
+    )
+    
+    # Handle state dict nesting
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+    model.load_state_dict(state_dict)
+    
+    model.to(device)
+    model.eval()
+    print(f"🚀 Model loaded successfully from {os.path.basename(checkpoint_path)}")
+    return model, vocab
+# ---------------------------------------------------------------------------
+# 2. Logic for Key-per-Part and Majority Voting
+# ---------------------------------------------------------------------------
+
+def get_sections(score):
+    """Identifies A and B parts to allow for local key changes."""
+    flat = score.parts[0].flatten() if score.parts else score.flatten()
     # Find repeat boundaries
-    boundaries = {0.0, float(duration)}
-    for el in flat.getElementsByClass(music21.bar.Repeat):
-        if el.direction == 'end':
-            boundaries.add(float(el.offset))
-
-    sorted_bounds = sorted(list(boundaries))
-
+    offsets = [0.0]
+    for r in flat.getElementsByClass(music21.bar.Repeat):
+        offsets.append(r.offset)
+    offsets.append(flat.duration.quarterLength)
+    offsets = sorted(list(set(offsets)))
+    
     sections = []
-    for i in range(len(sorted_bounds) - 1):
-        start = sorted_bounds[i]
-        end = sorted_bounds[i+1]
-
-        # Skip empty sections (if any)
-        if start >= end:
-            continue
-
-        # Extract notes in this range for analysis
-        # (Filtering notes is safer than slicing stream which can be slow/buggy)
-        notes = []
-        for n in flat.notes:
-            if n.offset >= start and n.offset < end:
-                notes.append(n)
-
-        if not notes:
-            # Fallback if no notes: use previous key or default
-            key = music21.key.Key('C')
-        else:
-            # Create a temp stream for analysis
-            s = music21.stream.Stream()
-            for n in notes:
-                s.insert(n.offset - start, n)
-            key = s.analyze('key')
-
-        sections.append(Section(start, end, key, i))
-
+    for i in range(len(offsets)-1):
+        s = music21.stream.Stream()
+        notes = [n for n in flat.notes if n.offset >= offsets[i] and n.offset < offsets[i+1]]
+        for n in notes:
+            s.insert(n.offset - offsets[i], n)
+        local_key = s.analyze('key')
+        sections.append({'start': offsets[i], 'end': offsets[i+1], 'key': local_key})
     return sections
 
-def apply_keys(score, sections: list[Section]):
-    """
-    Insert analyzed Key objects into the score at section starts.
-    """
-    # We operate on the score's parts or the score itself?
-    # _extract_features_from_score uses score.flatten().
-    # Inserting into the original score parts ensures it propagates.
-
-    # Find the main part (usually the first one with notes)
-    if hasattr(score, "parts") and score.parts:
-        part = score.parts[0]
-    else:
-        part = score
-
-    for sec in sections:
-        # Check if there's already a key at this exact offset (recurse into measures)
-        to_remove = []
-        # Use recurse() to find keys inside measures
-        for k in part.recurse().getElementsByClass(music21.key.Key):
-            # Calculate absolute offset relative to the part
-            try:
-                k_offset = k.getOffsetInHierarchy(part)
-            except Exception:
-                # Fallback if hierarchy is broken or ambiguous
-                k_offset = k.offset
-
-            if float(k_offset) == float(sec.start):
-                to_remove.append(k)
-
-        for k in to_remove:
-            # Remove from its immediate container (e.g., Measure)
-            # activeSite is usually the container being iterated or the primary one
-            container = k.activeSite
-            if container:
-                container.remove(k)
-
-        # Insert new key into the part directly (it will be floating, not in a measure)
-        # This is fine for _extract_features_from_score which flattens anyway.
-        part.insert(sec.start, sec.key_obj)
-
 # ---------------------------------------------------------------------------
-# 2. Prediction & Post-processing
+# 3. ABC Annotation Logic
 # ---------------------------------------------------------------------------
 
-MeasureData = collections.namedtuple("MeasureData", ["number", "chord", "section_index", "key_label"])
-
-def predict_for_score(score, model, vocab, device):
-    """
-    Extract features and run inference.
-    Returns (features, predictions).
-    """
-    features = _extract_features_from_score(score)
-    if not features:
-        return [], []
-
-    # tune_to_arrays expects a list of feature dicts (which is what features is)
-    # normalize=True matches training default
-    X, _ = tune_to_arrays(features, vocab=None, normalize=True)
-
-    # Run prediction
-    # X is (seq_len, input_dim)
-    # predict_chords expects X, and if vocab is provided, returns decoded strings
-    predictions = predict_chords(model, X, lengths=len(X), vocab=vocab, device=device)
-
-    # predict_chords returns a list of lists (batch_size=1) because we passed 2D array unsqueezed
-    if predictions and isinstance(predictions[0], list):
-        predictions = predictions[0]
-
-    return features, predictions
-
-def post_process_predictions(features, predictions, sections):
-    """
-    Group predictions by measure and apply majority voting.
-    Map degrees back to chords using local key.
-    """
-    # Group by measure
-    measures = collections.defaultdict(list)
-    measure_keys = {} # measure_num -> key_tonic_pc (from first note)
-
-    for feat, pred_degree in zip(features, predictions):
-        m_num = feat["measure"]
-        measures[m_num].append(pred_degree)
-        if m_num not in measure_keys:
-            measure_keys[m_num] = (feat["key_tonic_pc"], feat["key_label"])
-
-    sorted_m_nums = sorted(measures.keys())
-    results = []
-
-    for m_num in sorted_m_nums:
-        degrees = measures[m_num]
-        # Majority vote
-        counts = collections.Counter(degrees)
-        winner_degree = counts.most_common(1)[0][0]
-
-        tonic_pc, key_label = measure_keys[m_num]
-
-        # Convert to absolute chord
-        abs_chord = degree_to_chord(winner_degree, tonic_pc)
-
-        # Identify section index
-        # We need the offset of the measure to match against sections.
-        # Ideally features would have offset, but they have 'beat', 'measure'.
-        # We can infer section from key_label if sections have unique keys? No.
-        # But we processed sections sequentially.
-        # Let's assign section index based on where this measure falls.
-        # Since we don't have measure offsets easily here (features don't store absolute offset),
-        # we can rely on the key_label change or just sequential order if we assume measures are sorted.
-        # Wait, features are sorted by time (as they come from _extract_features_from_score).
-        # We can track section changes.
-
-        # Better: use the original score structure?
-        # Or, just use the fact that sections are split by time.
-        # But we aggregated by measure.
-        # Let's assume measures are monotonic.
-
-        # We can find which section this measure belongs to by looking at the key_label
-        # stored in features. But key labels might be same for different sections.
-        # However, for the display purpose "A-Part", "B-Part", we need to know when section changes.
-
-        # Let's try to map measure number to section.
-        # We can't easily do it without offset.
-        # But wait, `_extract_features_from_score` processes notes in order.
-        # So the list of features is ordered.
-        # The measure numbers increase.
-
-        # Let's just iterate through the sorted measures and detect section boundaries
-        # by checking if we crossed a section boundary?
-        # We don't have offsets here.
-
-        # Workaround: pass the score and build a map of measure_num -> section_index?
-        # Or just use the sections list and measure objects.
-
-        # Simpler: The features have 'key_tonic_pc'.
-        # If the key changes, it's a strong hint.
-        # But if key doesn't change (A: G, B: G), we lose the boundary info.
-
-        # Solution: Add 'section_index' to features during extraction? No, can't modify parser easily.
-        # Use the fact that we inserted keys at specific offsets.
-        # If we iterate through measures in the score, we know their offsets.
-
-        results.append(MeasureData(m_num, abs_chord, -1, key_label)) # section_index to be filled later
-
-    return results
-
-def assign_sections_to_measures(score, measure_data: list[MeasureData], sections: list[Section]):
-    """
-    Map each measure datum to a section index based on measure offsets in score.
-    """
-    # Create a map of measure_number -> offset
-    # Note: measure numbers might not be unique if there are multiple parts,
-    # but we assume single melody line.
-
-    m_offsets = {}
-    # Use parts[0]
-    if hasattr(score, "parts") and score.parts:
-        part = score.parts[0]
-    else:
-        part = score
-
-    for m in part.getElementsByClass(music21.stream.Measure):
-        m_offsets[m.measureNumber] = float(m.offset)
-
-    updated_data = []
-    for md in measure_data:
-        off = m_offsets.get(md.number, 0.0)
-        # Find section
-        sec_idx = 0
-        for sec in sections:
-            if off >= sec.start and off < sec.end:
-                sec_idx = sec.index
-                break
-            # Handle edge case where measure starts exactly at end (shouldn't happen for valid measures)
-            # or last section
-            if off >= sec.start and sec == sections[-1]:
-                sec_idx = sec.index
-
-        updated_data.append(md._replace(section_index=sec_idx))
-
-    return updated_data
-
-def format_output(measure_data: list[MeasureData], sections: list[Section]):
-    """
-    Print Lead Sheet style output.
-    """
-    current_section = -1
-
-    # Pre-compute section keys for display
-    section_keys = {s.index: s.key_obj for s in sections}
-
-    # Generate section labels (A, B, C...)
-    section_labels = {}
-    for i, s in enumerate(sections):
-        label = chr(ord('A') + i) # A, B, C...
-        key_str = f"{s.key_obj.tonic.name} {s.key_obj.mode}"
-        section_labels[s.index] = f"[{label}-Part] (Key: {key_str})"
-
-    # Buffer for current line
-    line_buffer = []
-
-    for md in measure_data:
-        if md.section_index != current_section:
-            # New section starting
-            if line_buffer:
-                print("| " + " | ".join(line_buffer) + " |")
-                line_buffer = []
-
-            print(f"\n{section_labels.get(md.section_index, '[Unknown Part]')}:")
-            current_section = md.section_index
-
-        line_buffer.append(md.chord if md.chord else "N.C.")
-
-    if line_buffer:
-        print("| " + " | ".join(line_buffer) + " |")
-    print() # Final newline
+def annotate_abc(original_file, measure_chords):
+    """Injects chords into the ABC text."""
+    with open(original_file, 'r') as f:
+        lines = f.readlines()
+    
+    new_lines = []
+    m_count = 1
+    for line in lines:
+        if line.startswith(('X:', 'T:', 'K:', 'M:', 'L:', 'R:', 'Q:', '%%')):
+            new_lines.append(line)
+            continue
+        
+        # Simple measure-based injection
+        segments = line.split('|')
+        new_segments = []
+        for seg in segments:
+            if seg.strip() and m_count in measure_chords:
+                chord = measure_chords[m_count]
+                new_segments.append(f' "{chord}"{seg}')
+                m_count += 1
+            else:
+                new_segments.append(seg)
+        new_lines.append('|'.join(new_segments))
+    
+    out_path = original_file.replace('.abc', '_predicted.abc')
+    with open(out_path, 'w') as f:
+        f.writelines(new_lines)
+    print(f"\n✅ Annotated ABC saved to: {out_path}")
 
 # ---------------------------------------------------------------------------
-# Main
+# Main Execution
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Predict chords for an ABC tune.")
-    parser.add_argument("abc_file", help="Path to the ABC file.")
-    parser.add_argument("--checkpoint", default=os.path.join(_ROOT, "checkpoints", "degree"),
-                        help="Path to checkpoint directory (default: checkpoints/degree)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("abc_file")
+    parser.add_argument("--checkpoint", required=True)
     args = parser.parse_args()
 
-    # 1. Load Model
-    if not os.path.isdir(args.checkpoint):
-        sys.exit(f"Error: Checkpoint directory not found: {args.checkpoint}")
-
-    print(f"Loading model from {args.checkpoint}...", file=sys.stderr)
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    
+    # 1. Load
+    model, vocab = load_fixed_model(args.checkpoint, device)
+    score = music21.converter.parse(args.abc_file)
+    
+    # 2. Key Analysis per Part
+    sections = get_sections(score)
+    
+    # 3. Predict
+    # (Simplified for brevity: extract features and run model)
+    features = _extract_features_from_score(score)
+    X, _ = tune_to_arrays(features, vocab=None, normalize=True)
+    X_tensor = torch.FloatTensor(X).unsqueeze(0).to(device)
+    
+    with torch.no_grad():
+        output = model(X_tensor, torch.tensor([len(X)]))
+        pred_indices = output.argmax(dim=-1).squeeze().tolist()
+    
+    # Map back to vocab
+    # Map back to vocab (Handling string vs int keys)
+    # Ensure all keys in inv_vocab are integers
+    inv_vocab = {int(k): v for k, v in vocab.items()} 
+    
     try:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model, vocab = load_model_and_vocab(args.checkpoint, device=device)
-    except Exception as e:
-        sys.exit(f"Error loading model: {e}")
+        pred_degrees = [inv_vocab[idx] for idx in pred_indices]
+    except KeyError as e:
+        print(f"Error: Predicted index {e} not found in vocabulary.")
+        print(f"Available indices: {list(inv_vocab.keys())}")
+        sys.exit(1)
+    # 4. Majority Vote per Measure
+    m_chords = {}
+    m_votes = collections.defaultdict(list)
+    m_tonics = {}
 
-    # 2. Parse ABC
-    print(f"Parsing {args.abc_file}...", file=sys.stderr)
-    try:
-        # music21 converter.parse can handle ABC files
-        score = music21.converter.parse(args.abc_file)
-    except Exception as e:
-        sys.exit(f"Error parsing ABC file: {e}")
+    for feat, deg in zip(features, pred_degrees):
+        m_num = feat['measure']
+        m_votes[m_num].append(deg)
+        m_tonics[m_num] = feat['key_tonic_pc']
 
-    # 3. Analyze Structure & Apply Keys
-    print("Analyzing structure...", file=sys.stderr)
-    sections = analyze_structure(score)
-    apply_keys(score, sections)
+    for m_num, votes in m_votes.items():
+        top_degree = collections.Counter(votes).most_common(1)[0][0]
+        m_chords[m_num] = degree_to_chord(top_degree, m_tonics[m_num])
+        print(f"Measure {m_num}: {m_chords[m_num]} ({top_degree})")
 
-    # 4 & 5. Extract Features & Predict
-    print("Running inference...", file=sys.stderr)
-    features, predictions = predict_for_score(score, model, vocab, device)
-
-    if not features:
-        sys.exit("Error: No notes found in score.")
-
-    # 6. Post-process
-    measure_data = post_process_predictions(features, predictions, sections)
-    measure_data = assign_sections_to_measures(score, measure_data, sections)
-
-    # 7. Output
-    format_output(measure_data, sections)
+    # 5. Annotate
+    annotate_abc(args.abc_file, m_chords)
 
 if __name__ == "__main__":
     main()
