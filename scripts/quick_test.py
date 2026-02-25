@@ -97,7 +97,10 @@ def main():
         return 1
 
     from src.model import ChordVocabulary, LSTMChordModel, tune_to_arrays, get_input_dim
-    from src.parser import _iter_scores_from_abc, _extract_features_from_score
+    from src.parser import (
+        _iter_scores_from_abc, _extract_features_from_score,
+        chord_to_degree, degree_to_chord,
+    )
     from src.training_data import tune_has_chords, TRAINING_ABC_FILES
 
     # ── Load checkpoint + vocab ──────────────────────────────────────────────
@@ -139,7 +142,7 @@ def main():
     inferred = _infer_cfg(state_dict)
 
     # Start from config file defaults, override with inferred shape truth
-    cfg = {"dropout": 0.3, "one_hot_scale_degree": True}
+    cfg = {"dropout": 0.3, "one_hot_scale_degree": True, "target_type": "absolute"}
     if os.path.isfile(config_path):
         with open(config_path) as f:
             cfg.update(json.load(f))
@@ -150,7 +153,9 @@ def main():
             (get_input_dim(cfg.get("one_hot_scale_degree", True))):
         cfg["one_hot_scale_degree"] = (cfg["input_dim"] == get_input_dim(True))
 
-    sd_onehot = cfg["one_hot_scale_degree"]
+    sd_onehot   = cfg["one_hot_scale_degree"]
+    target_type = cfg.get("target_type", "absolute")
+    degree_mode = (target_type == "degree")
 
     device = (torch.device("mps")  if torch.backends.mps.is_available() else
               torch.device("cuda") if torch.cuda.is_available() else
@@ -166,8 +171,9 @@ def main():
     ).to(device)
     model.load_state_dict(state_dict)
     model.eval()
+    mode_tag = f"{CYAN}degree mode{RESET}" if degree_mode else "absolute mode"
     print(f"{CYAN}Loaded{RESET} {model_path}  (input_dim={cfg['input_dim']}, "
-          f"classes={cfg['num_classes']}, device={device})")
+          f"classes={cfg['num_classes']}, target={mode_tag}, device={device})")
 
     # ── Replicate val split (identical seed + logic as train_lstm.py) ────────
     abc_paths = args.abc_paths or TRAINING_ABC_FILES
@@ -204,6 +210,15 @@ def main():
     score = val_scores[idx]
     tune  = _extract_features_from_score(score)
 
+    # In degree mode: remap ground-truth labels to Roman numerals so they
+    # match what the model was trained to predict.
+    tune_tonic_pc = tune[0].get("key_tonic_pc", 2) if tune else 2
+    tune_key_label = tune[0].get("key_label", "D major (default)") if tune else "D major"
+    if degree_mode:
+        for row in tune:
+            tpc = row.get("key_tonic_pc", tune_tonic_pc)
+            row["target_chord"] = chord_to_degree(row["target_chord"], tpc)
+
     # Try to get the tune title
     title = "Unknown"
     try:
@@ -213,7 +228,8 @@ def main():
     except Exception:
         pass
 
-    print(f"\n{BOLD}Tune {idx+1}/{len(val_scores)}: {title}{RESET}\n")
+    key_info = f"  {CYAN}Key: {tune_key_label}{RESET}" if degree_mode else ""
+    print(f"\n{BOLD}Tune {idx+1}/{len(val_scores)}: {title}{RESET}{key_info}\n")
 
     # ── Inference ────────────────────────────────────────────────────────────
     X, _ = tune_to_arrays(tune, vocab=None, normalize=True,
@@ -232,9 +248,13 @@ def main():
         conf   = probs.max(dim=-1).values.cpu().numpy()
 
     # ── Truth table ──────────────────────────────────────────────────────────
-    col_w = [6, 10, 14, 14, 10]
+    # In degree mode the Ground Truth / Predicted columns show "V7 (A7)" —
+    # the degree label followed by the absolute chord name in parentheses.
+    col_w = [6, 10, 18, 18, 10]
+    gt_header  = "Ground Truth" + ("  (abs)" if degree_mode else "")
+    pred_header = "Predicted" + ("    (abs)" if degree_mode else "")
     header = (f"{'Bar/Bt':<{col_w[0]}}  {'Note (Deg)':<{col_w[1]}}  "
-              f"{'Ground Truth':<{col_w[2]}}  {'Predicted':<{col_w[3]}}  "
+              f"{gt_header:<{col_w[2]}}  {pred_header:<{col_w[3]}}  "
               f"{'Conf %':>{col_w[4]}}")
     sep = "─" * len(header)
 
@@ -250,6 +270,8 @@ def main():
     truth_counter: dict[str, int] = {}
     error_pairs:  list[tuple[str, str]] = []
 
+    import music21.pitch
+
     prev_chord = None
     for i, row in enumerate(tune):
         truth = row["target_chord"]
@@ -258,7 +280,6 @@ def main():
         note_midi = int(row["pitch"])
         sd        = int(row.get("scale_degree", 0))
 
-        import music21.pitch
         note_name = music21.pitch.Pitch(note_midi).nameWithOctave
 
         bar  = row.get("measure", "?")
@@ -267,31 +288,46 @@ def main():
         pos  = f"{bar}/{beat_str}"
         note_col = f"{note_name}({_SD_NAMES[sd]})"
 
-        # Stats
+        # In degree mode: build display strings with absolute name in parens
+        # e.g. "V7 (A7)" — lets the musician read the table without a lookup table
+        if degree_mode:
+            row_tonic = row.get("key_tonic_pc", tune_tonic_pc)
+            truth_abs = degree_to_chord(truth, row_tonic)
+            pred_abs  = degree_to_chord(pred,  row_tonic)
+            truth_disp = f"{truth}({truth_abs})"
+            pred_disp  = f"{pred}({pred_abs})"
+        else:
+            truth_disp = truth
+            pred_disp  = pred
+            truth_abs  = truth
+            pred_abs   = pred
+
+        # Stats (compare degree labels in degree mode, absolute labels otherwise)
         truth_counter[truth] = truth_counter.get(truth, 0) + 1
         if truth not in ("N.C.",):
             n_total += 1
             pred_counter[pred] = pred_counter.get(pred, 0) + 1
             correct = (truth == pred)
-            acceptable = _is_acceptable(truth, pred)
+            # Acceptable-substitution check: use absolute names in both modes
+            acceptable = (not correct) and _is_acceptable(truth_abs, pred_abs)
             if correct:
                 n_correct += 1
             elif acceptable:
                 n_acceptable += 1
             else:
-                error_pairs.append((truth, pred))
+                error_pairs.append((truth_disp, pred_disp))
             if not correct and c >= 85.0:
-                confident_errors.append((bar, beat_str, truth, pred, c))
+                confident_errors.append((bar, beat_str, truth_disp, pred_disp, c))
 
         # Row formatting
         if truth == pred:
-            pred_col = f"{GREEN}{pred:<{col_w[3]}}{RESET}"
+            pred_col = f"{GREEN}{pred_disp:<{col_w[3]}}{RESET}"
             row_prefix = "  "
-        elif _is_acceptable(truth, pred):
-            pred_col = f"{YELLOW}{pred:<{col_w[3]}}{RESET}"
+        elif acceptable:
+            pred_col = f"{YELLOW}{pred_disp:<{col_w[3]}}{RESET}"
             row_prefix = "~ "
         else:
-            pred_col = f"{RED}{pred:<{col_w[3]}}{RESET}"
+            pred_col = f"{RED}{pred_disp:<{col_w[3]}}{RESET}"
             row_prefix = "✗ "
 
         conf_str = f"{c:>9.1f}%"
@@ -299,7 +335,7 @@ def main():
             conf_str = f"{RED}{BOLD}{conf_str}{RESET}"
 
         print(f"{row_prefix}{pos:<{col_w[0]}}  {note_col:<{col_w[1]}}  "
-              f"{truth:<{col_w[2]}}  {pred_col}  {conf_str}")
+              f"{truth_disp:<{col_w[2]}}  {pred_col}  {conf_str}")
 
     print(sep)
 

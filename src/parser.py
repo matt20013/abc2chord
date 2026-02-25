@@ -5,6 +5,192 @@ import music21.meter
 import sys
 import argparse
 
+# ── Pitch-class lookup tables ─────────────────────────────────────────────────
+
+_NOTE_TO_PC: dict[str, int] = {
+    "C": 0,  "C#": 1,  "Db": 1,  "D": 2,  "D#": 3,  "Eb": 3,
+    "E": 4,  "F": 5,   "F#": 6,  "Gb": 6, "G": 7,   "G#": 8,
+    "Ab": 8, "A": 9,   "A#": 10, "Bb": 10, "B": 11,
+}
+# Flat-preferred spelling for reconstructing chord names from a pitch class.
+_PC_TO_NOTE: list[str] = [
+    "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"
+]
+# Chromatic degree above tonic → (MAJOR roman, minor roman)
+_DEGREE_NAMES: dict[int, tuple[str, str]] = {
+    0:  ("I",    "i"),
+    1:  ("bII",  "bii"),
+    2:  ("II",   "ii"),
+    3:  ("bIII", "biii"),
+    4:  ("III",  "iii"),
+    5:  ("IV",   "iv"),
+    6:  ("bV",   "bv"),
+    7:  ("V",    "v"),
+    8:  ("bVI",  "bvi"),
+    9:  ("VI",   "vi"),
+    10: ("bVII", "bvii"),
+    11: ("VII",  "vii"),
+}
+# Reverse: roman stem → semitone offset above tonic
+_DEGREE_TO_OFFSET: dict[str, int] = {
+    "I": 0,   "bII": 1,  "II": 2,   "bIII": 3, "III": 4,
+    "IV": 5,  "bV": 6,   "V": 7,    "bVI": 8,  "VI": 9,
+    "bVII": 10, "VII": 11,
+    "i": 0,   "bii": 1,  "ii": 2,   "biii": 3, "iii": 4,
+    "iv": 5,  "bv": 6,   "v": 7,    "bvi": 8,  "vi": 9,
+    "bvii": 10, "vii": 11,
+}
+
+
+def absolute_to_degree(chord_root_pc: int, key_tonic_pc: int,
+                       chord_quality: str = "",
+                       is_major_key: bool = True) -> str:
+    """
+    "Musician's Logic" core: rotate the chromatic scale by the key tonic and
+    map the chord quality to a standard Roman Numeral string.
+
+    Args:
+        chord_root_pc : MIDI pitch class of the chord root (0-11).
+        key_tonic_pc  : MIDI pitch class of the key tonic  (0-11).
+        chord_quality : suffix string that carries the quality, e.g. "m", "7",
+                        "dim", "aug", "".  Pass the raw simplified suffix.
+        is_major_key  : reserved for future modal handling; currently unused.
+
+    Returns:
+        Roman numeral string, e.g. "I", "ii", "V7", "bVII", "viidim".
+
+    Examples (key of G, tonic_pc=7):
+        absolute_to_degree(7, 7, "")    →  "I"      G major
+        absolute_to_degree(0, 7, "")    →  "IV"     C major
+        absolute_to_degree(2, 7, "7")   →  "V7"     D7
+        absolute_to_degree(5, 7, "")    →  "bVII"   F major  (common in jigs)
+        absolute_to_degree(9, 7, "m")   →  "ii"     Am
+    """
+    # Step 1: interval relative to tonic (0-11)
+    interval = (chord_root_pc - key_tonic_pc) % 12
+
+    # Step 2: map interval → base Roman numeral
+    degree_map = {
+        0: "I",   1: "bII",  2: "II",   3: "bIII",
+        4: "III", 5: "IV",   6: "bV",   7: "V",
+        8: "bVI", 9: "VI",  10: "bVII", 11: "VII",
+    }
+    root_degree = degree_map[interval]
+
+    # Step 3: lower to minor case when quality contains 'm' but not 'dim'
+    q = chord_quality.strip()
+    if "m" in q.lower() and "dim" not in q.lower():
+        root_degree = root_degree.lower()
+
+    # Step 4: append quality suffixes
+    if "7" in q:
+        root_degree += "7"
+    elif "dim" in q.lower():
+        root_degree += "dim"
+    elif "aug" in q.lower() or "+" in q:
+        root_degree += "aug"
+
+    return root_degree
+
+
+def chord_to_degree(chord_str: str, tonic_pc: int) -> str:
+    """Convert an absolute chord label string to a Roman-numeral degree.
+
+    Parses the root and quality from chord_str, then delegates to
+    absolute_to_degree() for the interval arithmetic.
+
+    Examples (key of D, tonic_pc=2):
+        "A7"  →  "V7"      "Bm"  →  "vi"      "G"  →  "IV"
+    """
+    if not chord_str or chord_str == "N.C.":
+        return chord_str
+
+    root_match = re.match(r"^([A-G][b#]?)", chord_str)
+    if not root_match:
+        return chord_str
+
+    root    = root_match.group(1)
+    suffix  = chord_str[len(root):]
+    root_pc = _NOTE_TO_PC.get(root)
+    if root_pc is None:
+        return chord_str
+
+    return absolute_to_degree(root_pc, tonic_pc, suffix)
+
+
+def map_chord_to_degree(chord_label: str, key_context) -> str:
+    """
+    Public API: convert an absolute chord label to its Roman-numeral degree.
+
+    key_context accepts multiple types so callers don't need to know internals:
+        int            → treated directly as tonic pitch class (0-11)
+        str            → root note name, e.g. "D", "Gb"  (major assumed)
+        music21.key.Key / KeySignature → tonic read from .tonic.pitchClass
+
+    Examples in Key of G (tonic_pc=7):
+        map_chord_to_degree("G",  "G")   →  "I"
+        map_chord_to_degree("C",  7)     →  "IV"
+        map_chord_to_degree("D7", key_G) →  "V7"   (where key_G is a music21 Key)
+        map_chord_to_degree("Am", "G")   →  "ii"
+    """
+    if isinstance(key_context, int):
+        tonic_pc = key_context
+    elif isinstance(key_context, str):
+        root = key_context.strip()
+        root = root[0].upper() + root[1:] if root else root
+        tonic_pc = _NOTE_TO_PC.get(root[:2] if len(root) > 1 and root[1] in "b#" else root[:1], 0)
+    else:
+        try:
+            tonic_pc = key_context.tonic.pitchClass
+        except AttributeError:
+            tonic_pc = 0
+    return chord_to_degree(chord_label, tonic_pc)
+
+
+# Shorter alias for internal pipeline use.
+map_to_degree = chord_to_degree
+
+
+def degree_to_chord(degree_str: str, tonic_pc: int) -> str:
+    """Convert a Roman-numeral degree string back to an absolute chord label.
+
+    Examples (key of D, tonic_pc=2):
+        "V7"  →  "A7"      "vi"  →  "Bm"      "IV"  →  "G"
+
+    Used by inference scripts to display human-readable absolute chord names
+    when the model was trained in degree mode.
+    """
+    if not degree_str or degree_str == "N.C.":
+        return degree_str
+
+    # Peel quality suffix (greedy: check longer suffixes first)
+    quality = ""
+    base = degree_str
+    for sfx in ("dim", "aug", "7"):
+        if base.endswith(sfx):
+            quality = sfx
+            base = base[: -len(sfx)]
+            break
+
+    offset = _DEGREE_TO_OFFSET.get(base)
+    if offset is None:
+        return degree_str   # unrecognised degree — pass through
+
+    chord_pc   = (tonic_pc + offset) % 12
+    root       = _PC_TO_NOTE[chord_pc]
+    # Lowercase stem → minor quality.  Skip the 'b' flat prefix when checking.
+    stem_char  = base[1] if base.startswith("b") and len(base) > 1 else base[0]
+    is_minor   = stem_char.islower()
+
+    if quality == "dim":
+        return root + "dim"
+    if quality == "aug":
+        return root + "aug"
+    if quality == "7":
+        return root + ("m7" if is_minor else "7")
+    return root + ("m" if is_minor else "")
+
+
 # ── Chord simplification ──────────────────────────────────────────────────────
 
 # Mapping trace: collect (raw, simplified) pairs until we hit the limit.
@@ -60,6 +246,10 @@ def simplify_chord_label(chord_str: str) -> str:
 
     # 1. Strip slash-bass (take everything before the first '/')
     c = c.split("/")[0]
+
+    # 1b. Strip ABC octave markers (commas and apostrophes) from anywhere in the
+    #     chord label — e.g. "B," → "B", "A,m" → "Am", "G,7" → "G7".
+    c = re.sub(r"[,']", '', c)
 
     # 2a. Fix ABC dash-flat in compound chords: letter + '-' + more chars
     #     e.g.  B-m → Bbm   E-7 → Eb7   B-dim → Bbdim
@@ -237,6 +427,8 @@ def _extract_features_from_score(score):
                 "is_rest":      0,
                 "scale_degree": scale_degree,
                 "meter_norm":   meter_norm,
+                "key_tonic_pc": tonic_pc,    # stored for degree-mode conversion
+                "key_label":    key_label,   # human-readable key for display
                 "target_chord": active_chord,
             })
     _print_scale_degree_debug(dataset, key_label)

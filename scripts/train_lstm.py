@@ -59,7 +59,17 @@ def main():
     parser.add_argument("--scale-degree-onehot",  action=argparse.BooleanOptionalAction, default=True,
                         help="One-hot encode scale degree (12-dim). Default: on. "
                              "Use --no-scale-degree-onehot for single normalised float.")
+    parser.add_argument("--target-type", choices=["absolute", "degree"], default="degree",
+                        help="Chord label space for training. "
+                             "'degree' (default) = Roman-numeral degrees relative to key "
+                             "(I, ii, V7 etc.) — ~14-20 universal classes, key-invariant. "
+                             "'absolute' = raw chord names (G, Am, A7 etc.) — ~35 classes.")
+    parser.add_argument("--target-mode", choices=["absolute", "degree"], default=None,
+                        help="Alias for --target-type.")
     args = parser.parse_args()
+    # --target-mode is an alias; it wins if both are specified.
+    if args.target_mode is not None:
+        args.target_type = args.target_mode
 
     if not TORCH_AVAILABLE or torch is None:
         print("PyTorch is required: pip install torch", file=sys.stderr)
@@ -75,6 +85,7 @@ def main():
         _extract_features_from_score,
         _iter_scores_from_abc,
         print_chord_mapping_trace,
+        chord_to_degree,
     )
     from src.training_data import tune_has_chords
     import random
@@ -118,6 +129,17 @@ def main():
 
     # Emit the first-100-events mapping trace now that all scores have been parsed
     print_chord_mapping_trace()
+
+    # ── Degree-mode label conversion ─────────────────────────────────────────
+    # If --target-type degree: remap every target_chord to its Roman-numeral
+    # degree relative to the tune's key tonic.  key_tonic_pc is stored in each
+    # feature dict by _extract_features_from_score.
+    if args.target_type == "degree":
+        for tune in train_tunes + val_tunes:
+            for row in tune:
+                tpc = row.get("key_tonic_pc", 2)
+                row["target_chord"] = chord_to_degree(row["target_chord"], tpc)
+        print("[degree mode] Converted target chords → Roman-numeral degrees.")
 
     print(f"Split: {len(train_scores)} train tunes → {len(train_tunes)} sequences | "
           f"{len(val_scores)} val tunes → {len(val_tunes)} sequences")
@@ -175,7 +197,8 @@ def main():
     sd_tag = "onehot-12" if sd_onehot else "scalar"
     print(f"Model: {args.layers}-layer {bidir_tag} LSTM, hidden={args.hidden}, "
           f"dropout={args.dropout}, wd={args.weight_decay}, "
-          f"scale_degree={sd_tag}, input_dim={input_dim}")
+          f"scale_degree={sd_tag}, input_dim={input_dim}, "
+          f"target={args.target_type} ({num_classes} classes)")
 
     pad_idx = vocab.label_to_idx[ChordVocabulary.PAD]
     criterion = torch.nn.CrossEntropyLoss(
@@ -197,6 +220,7 @@ def main():
         "num_layers": args.layers, "num_classes": num_classes,
         "dropout": args.dropout, "bidirectional": args.bidirectional,
         "one_hot_scale_degree": sd_onehot,
+        "target_type": args.target_type,
     }
     with open(os.path.join(args.out, "model_config.json"), "w") as f:
         json.dump(model_config, f, indent=2)
