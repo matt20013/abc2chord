@@ -66,6 +66,10 @@ def main():
                              "'absolute' = raw chord names (G, Am, A7 etc.) — ~35 classes.")
     parser.add_argument("--target-mode", choices=["absolute", "degree"], default=None,
                         help="Alias for --target-type.")
+    parser.add_argument("--relaxed", action=argparse.BooleanOptionalAction, default=True,
+                        help="Relaxed chord simplification (default: on). "
+                             "Collapses m7→m and maj7→root for a smaller, denser vocabulary. "
+                             "Use --no-relaxed to keep m7 and maj7 as distinct classes.")
     args = parser.parse_args()
     # --target-mode is an alias; it wins if both are specified.
     if args.target_mode is not None:
@@ -86,8 +90,13 @@ def main():
         _iter_scores_from_abc,
         print_chord_mapping_trace,
         chord_to_degree,
+        set_relaxed_mode,
     )
     from src.training_data import tune_has_chords
+
+    # Apply relaxed mode globally before any parsing begins so every
+    # simplify_chord_label call uses the right collapsing strategy.
+    set_relaxed_mode(args.relaxed)
     import random
 
     # Collect all raw scores across all files so we can do a clean split
@@ -195,10 +204,11 @@ def main():
     ).to(device)
     bidir_tag = "bidirectional" if args.bidirectional else "unidirectional"
     sd_tag = "onehot-12" if sd_onehot else "scalar"
+    relax_tag = "relaxed" if args.relaxed else "strict"
     print(f"Model: {args.layers}-layer {bidir_tag} LSTM, hidden={args.hidden}, "
           f"dropout={args.dropout}, wd={args.weight_decay}, "
           f"scale_degree={sd_tag}, input_dim={input_dim}, "
-          f"target={args.target_type} ({num_classes} classes)")
+          f"target={args.target_type}/{relax_tag} ({num_classes} classes)")
 
     pad_idx = vocab.label_to_idx[ChordVocabulary.PAD]
     criterion = torch.nn.CrossEntropyLoss(
@@ -221,6 +231,7 @@ def main():
         "dropout": args.dropout, "bidirectional": args.bidirectional,
         "one_hot_scale_degree": sd_onehot,
         "target_type": args.target_type,
+        "relaxed": args.relaxed,
     }
     with open(os.path.join(args.out, "model_config.json"), "w") as f:
         json.dump(model_config, f, indent=2)

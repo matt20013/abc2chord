@@ -198,6 +198,29 @@ _TRACE_EVENTS: list[tuple[str, str]] = []
 _TRACE_LIMIT = 100
 _TRACE_PRINTED = False
 
+# Relaxed mode flag — set once before training via set_relaxed_mode().
+# True  (default) : collapse m7→m, maj7→root  (smaller vocabulary, more samples/class)
+# False (strict)  : keep m7 and maj7 as distinct classes
+_RELAXED_MODE: bool = True
+
+
+def set_relaxed_mode(relaxed: bool) -> None:
+    """Configure the global chord simplification mode.
+
+    Call this before parsing any training data.
+
+    relaxed=True  (default) — Collapse all minor extensions to m, all major
+        extensions to the root.  Targets ~24–30 classes.  Recommended for
+        small datasets where samples-per-class matters most.
+
+    relaxed=False (strict)  — Keep m7 and maj7 as distinct classes; still
+        collapse m9/m11 → m7 and maj9/maj11 → maj7.  Adds ~24 extra classes
+        but preserves the dominant-seventh vs tonic-seventh distinction.
+    """
+    global _RELAXED_MODE
+    _RELAXED_MODE = relaxed
+
+
 # Scale-degree validation: printed once for the first tune that has a chord.
 _SD_DEBUG_DONE = False
 _SD_INTERVAL_NAMES = [
@@ -215,25 +238,35 @@ _ENHARMONIC_MAP = {
 }
 
 
-def simplify_chord_label(chord_str: str) -> str:
+def simplify_chord_label(chord_str: str, relaxed: bool | None = None) -> str:
     """
     Normalise a raw chord label to a compact, consistent vocabulary.
 
-    Rules (applied in order):
-      0. Strip parentheses            (F) → F
-      1. Strip slash-bass             G/B → G, D/F# → D
-      2a. Fix ABC dash-flat root      B-m → Bbm, E-7 → Eb7  (dash = flat in compound)
-      2b. Fix ABC dash-minor (EOL)    B-  → Bm              (dash = minor at end)
-      3. Title-case root letter       bm  → Bm, dm → Dm
-      4. Enharmonic normalisation     A#→Bb, C#→Db, D#→Eb, F#→Gb, G#→Ab
-      5. Collapse extensions:
-           m / m7 / m9               → plain minor  (Cm7→Cm)
-           maj7 / add9 / sus4        → plain major  (Dmaj7→D)
-           7 / 9 / 11 / 13           → dominant 7   (A9→A7)
-           dim / dim7 / o / o7       → dim          (Bdim7→Bdim)
-           aug / +                   → aug          (C#+→Cbaug via step 4, or Dbaug)
-    Preserved distinctions: Major, Minor (m), Dominant 7 (7), dim, aug.
+    Steps 0-4 are always applied (ABC artefact removal, enharmonic normalisation).
+    Step 5 (extension collapsing) depends on the relaxed mode.
+
+    relaxed=True  — "Relaxed" (default) — collapse to minimal vocabulary:
+        m, m7, m9 …         → m          (Em7   → Em)
+        maj7, add9, 6, sus4 → root only  (Dmaj7 → D)
+        7, 9, 11, 13        → 7          (A9    → A7)
+        dim / dim7          → dim
+        aug / aug7 / +      → aug
+        Preserved: Major, m, 7, dim, aug  (~24–30 classes)
+
+    relaxed=False — "Strict" — keeps m7 and maj7 as distinct classes:
+        m           → m          (plain minor unchanged)
+        m7          → m7         (kept — distinct from m)
+        m9, m11 …   → m7         (collapsed to m7)
+        maj7        → maj7       (kept — distinct from major)
+        maj9, maj11 → maj7       (collapsed to maj7)
+        add9, sus4  → root only  (non-maj7 major extensions still collapse)
+        Everything else unchanged vs relaxed mode.
+
+    If relaxed is None, the module-level _RELAXED_MODE is used.
     """
+    if relaxed is None:
+        relaxed = _RELAXED_MODE
+
     if not chord_str or chord_str == "N.C.":
         return chord_str
 
@@ -274,27 +307,43 @@ def simplify_chord_label(chord_str: str) -> str:
     root = root_match.group(1)
     suffix = c[len(root):]
 
-    # Empty suffix → plain major
+    # Empty suffix → plain major (both modes)
     if suffix == "":
         return root
 
-    # Minor extensions: m, m7, m9, m11, m13, etc.
+    # ── Step 5: extension collapsing ─────────────────────────────────────────
+
+    # Minor family
     if re.match(r"^m\d*$", suffix):
-        return root + "m"
+        if relaxed:
+            return root + "m"          # Em7 → Em, Em9 → Em
+        else:
+            if suffix == "m":
+                return root + "m"      # plain minor unchanged
+            if suffix == "m7":
+                return root + "m7"     # kept as distinct class
+            return root + "m7"         # m9, m11, m13 → m7
 
-    # Major extensions: maj7, maj9, maj11, add9, add11, sus2, sus4, sus, 2, 4
-    if re.match(r"^(maj\d*|add\d+|sus\d*|2|4)$", suffix, re.IGNORECASE):
-        return root
+    # Major extensions (maj7, add9, 6, sus4, sus2, sus, 2, 4)
+    if re.match(r"^(maj\d*|add\d+|6|sus\d*|2|4)$", suffix, re.IGNORECASE):
+        if relaxed:
+            return root                # Dmaj7 → D, Dadd9 → D
+        else:
+            if re.match(r"^maj7$", suffix, re.IGNORECASE):
+                return root + "maj7"   # kept as distinct class
+            if re.match(r"^maj\d+$", suffix, re.IGNORECASE):
+                return root + "maj7"   # maj9, maj11 → maj7
+            return root                # add9, sus4, 6, 2, 4 → plain major
 
-    # Diminished: dim, dim7, o, o7
+    # Diminished: dim, dim7, o, o7 (both modes)
     if re.match(r"^(dim7?|o7?)$", suffix, re.IGNORECASE):
         return root + "dim"
 
-    # Augmented: aug, +
-    if re.match(r"^(aug|\+)$", suffix, re.IGNORECASE):
+    # Augmented: aug, aug7, + (both modes)
+    if re.match(r"^(aug7?|\+)$", suffix, re.IGNORECASE):
         return root + "aug"
 
-    # Dominant 7th and higher extensions: 7, 9, 11, 13 (optionally followed by more digits)
+    # Dominant 7th and higher extensions: 7, 9, 11, 13 (both modes)
     if re.match(r"^(7|9|11|13)\d*$", suffix):
         return root + "7"
 
@@ -311,7 +360,8 @@ def print_chord_mapping_trace() -> None:
     if _TRACE_PRINTED:
         return
     _TRACE_PRINTED = True
-    print("\n── Chord Mapping Trace (first 100 events) ─────────────────────────")
+    mode_tag = "relaxed" if _RELAXED_MODE else "strict"
+    print(f"\n── Chord Mapping Trace [{mode_tag} mode] (first 100 events) ────────")
     for raw, simplified in _TRACE_EVENTS:
         arrow = "  →  " if raw != simplified else "  =  "
         print(f"    {raw:<22}{arrow}{simplified}")
@@ -412,7 +462,7 @@ def _extract_features_from_score(score):
                 break
         if current_best_chord:
             raw_chord = current_best_chord.figure
-            active_chord = simplify_chord_label(raw_chord)
+            active_chord = simplify_chord_label(raw_chord, relaxed=_RELAXED_MODE)
             # Accumulate mapping trace (raw → simplified) until limit reached
             if len(_TRACE_EVENTS) < _TRACE_LIMIT:
                 _TRACE_EVENTS.append((raw_chord, active_chord))
