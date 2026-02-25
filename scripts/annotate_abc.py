@@ -11,21 +11,39 @@ import collections
 import os
 import re
 import sys
+import json
+
 import music21
 import numpy as np
 import torch
+import torch.nn as nn
 
 # Ensure src module is importable
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
-from src.model import load_model_and_vocab, tune_to_arrays, predict_chords
+# Explicitly import the parser and model utilities
 from src.parser import _extract_features_from_score, degree_to_chord
-
+from src.model import tune_to_arrays, predict_chords
 # ---------------------------------------------------------------------------
 # 1. Prediction Helpers
 # ---------------------------------------------------------------------------
+
+class LSTMChordModel(nn.Module):
+    def __init__(self, vocab_size, hidden_dim=32, n_layers=2, dropout=0.5,
+                 one_hot_scale_degree=True): # <--- MATCHING THE TRAINED ARCHITECTURE
+        super(LSTMChordModel, self).__init__()
+        self.input_dim = 17 if one_hot_scale_degree else 6
+        self.lstm = nn.LSTM(self.input_dim, hidden_dim, n_layers,
+                            batch_first=True, dropout=dropout, bidirectional=True)
+        self.fc = nn.Linear(hidden_dim * 2, vocab_size)
+
+    def forward(self, x, lengths):
+        packed_x = nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False)
+        packed_out, _ = self.lstm(packed_x)
+        out, _ = nn.utils.rnn.pad_packed_sequence(packed_out, batch_first=True)
+        return self.fc(out)
 
 def predict_for_score(score, model, vocab, device):
     """
@@ -36,14 +54,24 @@ def predict_for_score(score, model, vocab, device):
     if not features:
         return [], []
 
+    # 1. Prepare data
     X, _ = tune_to_arrays(features, vocab=None, normalize=True)
-    predictions = predict_chords(model, X, lengths=len(X), vocab=vocab, device=device)
+    X_tensor = torch.FloatTensor(X).unsqueeze(0).to(device)
+    lengths = torch.tensor([len(X)])
 
-    if predictions and isinstance(predictions[0], list):
-        predictions = predictions[0]
+    # 2. Run raw inference (don't use predict_chords here to avoid the .decode() error)
+    model.eval()
+    with torch.no_grad():
+        output = model(X_tensor, lengths)
+        # Get the index of the highest logit for each note
+        pred_indices = output.argmax(dim=-1).squeeze(0).cpu().numpy()
+
+    # 3. Manually decode using your dict (handling string vs int keys)
+    # Your vocab dict is likely { "0": "<PAD>", "1": "I", ... }
+    inv_vocab = {int(k): v for k, v in vocab.items()}
+    predictions = [inv_vocab.get(int(idx), "<UNK>") for idx in pred_indices]
 
     return features, predictions
-
 def get_measure_chords(features, predictions):
     """
     Group predictions by measure and apply majority voting.
@@ -217,30 +245,47 @@ def annotate_abc_content(content, score_measures, measure_chords):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser(description="Annotate an ABC file with predicted chords.")
     parser.add_argument("abc_file", help="Path to the ABC file.")
     parser.add_argument("--checkpoint", default=os.path.join(_ROOT, "checkpoints", "degree"),
-                        help="Path to checkpoint directory (default: checkpoints/degree)")
+                        help="Path to checkpoint directory")
     parser.add_argument("--mock", action="store_true", help="Use mock model (for testing).")
     args = parser.parse_args()
 
-    # 1. Load Model
+    # 1. Load Model (Correctly indented inside main)
     if args.mock:
         model, vocab = None, None
         print("Using MOCK model.", file=sys.stderr)
     else:
-        if not os.path.isdir(args.checkpoint):
-            sys.exit(f"Error: Checkpoint directory not found: {args.checkpoint}")
+        # Use our robust loading logic
+        target_path = args.checkpoint
+        checkpoint_dir = target_path if os.path.isdir(target_path) else os.path.dirname(target_path)
 
-        print(f"Loading model from {args.checkpoint}...", file=sys.stderr)
+        print(f"Loading model from {target_path}...", file=sys.stderr)
         try:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            model, vocab = load_model_and_vocab(args.checkpoint, device=device)
+            device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+            # We bypass the old src.model.load_model_and_vocab if it's outdated
+            # and use our fixed logic directly
+            checkpoint = torch.load(target_path if not os.path.isdir(target_path) else os.path.join(target_path, "lstm_chord.pt"), map_location=device)
+
+            # Load Vocab
+            vocab_path = os.path.join(checkpoint_dir, "chord_vocab.json")
+            with open(vocab_path, 'r') as f:
+                vocab = json.load(f)
+
+            config = checkpoint.get('config', {})
+            model = LSTMChordModel(
+                vocab_size=len(vocab),
+                hidden_dim=config.get('hidden_dim', 32),
+                n_layers=config.get('n_layers', 2),
+                one_hot_scale_degree=config.get('one_hot_scale_degree', True)
+            )
+            model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+            model.to(device)
+            model.eval()
         except Exception as e:
             sys.exit(f"Error loading model: {e}")
-
     # 2. Parse ABC
     print(f"Parsing {args.abc_file}...", file=sys.stderr)
     try:

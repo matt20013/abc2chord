@@ -8,6 +8,7 @@ checkpoints/
 training_data.csv
 # Keep experiments/ dir tracked but ignore large checkpoint copies inside it
 experiments/*.pt
+.coverage
 
 # Frontend
 node_modules/
