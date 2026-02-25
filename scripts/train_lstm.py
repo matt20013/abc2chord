@@ -39,7 +39,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train LSTM chord model")
     parser.add_argument("--epochs",        type=int,   default=50)
     parser.add_argument("--batch-size",    type=int,   default=8)
-    parser.add_argument("--hidden",        type=int,   default=64,   help="LSTM hidden size per direction")
+    parser.add_argument("--hidden",        type=int,   default=32,   help="LSTM hidden size per direction")
     parser.add_argument("--layers",        type=int,   default=2,    help="LSTM layers")
     parser.add_argument("--dropout",       type=float, default=0.5,  help="Dropout probability (LSTM + output layer)")
     parser.add_argument("--weight-decay",  type=float, default=1e-4, help="L2 weight decay for Adam")
@@ -50,7 +50,10 @@ def main():
     parser.add_argument("--val-fraction", type=float, default=0.2,  help="Fraction of tunes held out for validation")
     parser.add_argument("--out",          type=str,   default="checkpoints")
     parser.add_argument("--abc-paths",    nargs="*",  default=None, help="ABC files (default: training set)")
-    parser.add_argument("--augment-keys", action="store_true", help="Transpose every tune into all 12 keys")
+    parser.add_argument("--augment-keys", action="store_true",
+                        help="Transpose every tune into all 12 keys. "
+                             "Not recommended: scale-degree one-hot already provides "
+                             "key-invariance; augmentation adds 12x compute with no new signal.")
     parser.add_argument("--bidirectional",        action=argparse.BooleanOptionalAction, default=True,
                         help="Bidirectional LSTM (default: on; use --no-bidirectional to disable)")
     parser.add_argument("--scale-degree-onehot",  action=argparse.BooleanOptionalAction, default=True,

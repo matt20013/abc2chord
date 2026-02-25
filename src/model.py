@@ -15,16 +15,18 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 # ── Feature layout ────────────────────────────────────────────────────────────
-# Base features (always 6):
-#   pitch, duration, beat, measure, is_rest, meter_norm
-# Scale-degree block (inserted between is_rest and meter_norm):
-#   one-hot mode  → 12 floats  [sd_0 … sd_11]   INPUT_DIM = 18  (default)
-#   scalar mode   →  1 float   [sd_norm]         INPUT_DIM =  7
+# Absolute MIDI pitch is intentionally excluded from the feature vector.
+# Scale degree (relative to key tonic) already captures melodic function in a
+# key-invariant way, making raw pitch redundant and a memorisation cue.
 #
-# One-hot is preferred: the LSTM sees each degree as categorically distinct,
-# not numerically close.  Use get_input_dim() everywhere instead of a literal.
-_BASE_FEATURE_KEYS  = ["pitch", "duration", "beat", "measure", "is_rest"]
-_BASE_FEATURE_DIM   = len(_BASE_FEATURE_KEYS)   # 5  (meter_norm appended after SD)
+# Base features (4):  duration, beat, measure, is_rest
+# Scale-degree block: one-hot → 12 floats  [sd_0 … sd_11]  INPUT_DIM = 17
+#                     scalar  →  1 float   [sd_norm]        INPUT_DIM =  6
+# + meter_norm (1)
+#
+# Use get_input_dim() everywhere instead of a literal.
+_BASE_FEATURE_KEYS  = ["duration", "beat", "measure", "is_rest"]
+_BASE_FEATURE_DIM   = len(_BASE_FEATURE_KEYS)   # 4  (meter_norm appended after SD)
 _SD_KEYS_ONEHOT     = [f"sd_{i}" for i in range(12)]
 _SD_KEYS_SCALAR     = ["scale_degree_norm"]
 
@@ -35,10 +37,10 @@ def get_input_dim(one_hot_scale_degree: bool = True) -> int:
     return _BASE_FEATURE_DIM + sd_dim + 1   # +1 for meter_norm
 
 
-INPUT_DIM = get_input_dim(one_hot_scale_degree=True)   # = 18
+INPUT_DIM = get_input_dim(one_hot_scale_degree=True)   # = 17
 
-# Pitch is MIDI 0–127; we normalize. Beat/measure can be large; we'll normalize per tune or clip.
-PITCH_MIN, PITCH_MAX = 21, 108  # rough piano range
+# Kept for display / debug use outside this module (e.g. quick_test.py).
+PITCH_MIN, PITCH_MAX = 21, 108
 
 
 class ChordVocabulary:
@@ -102,11 +104,14 @@ _METER_NUM_MAX   = 12.0   # largest expected time-sig numerator (12/8)
 def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True):
     """Convert one tune (list of feature dicts) to (features, chord_indices).
 
+    Absolute pitch is excluded; scale degree encodes melodic function in a
+    key-invariant way, making raw MIDI pitch redundant.
+
     Feature vector layout:
-        one_hot_scale_degree=True  (default, INPUT_DIM=18):
-            [pitch, dur, beat, meas, is_rest, sd_0…sd_11, meter_norm]
-        one_hot_scale_degree=False (scalar,  INPUT_DIM=7):
-            [pitch, dur, beat, meas, is_rest, sd_norm,    meter_norm]
+        one_hot_scale_degree=True  (default, INPUT_DIM=17):
+            [dur, beat, meas, is_rest, sd_0…sd_11, meter_norm]
+        one_hot_scale_degree=False (scalar,  INPUT_DIM=6):
+            [dur, beat, meas, is_rest, sd_norm,    meter_norm]
 
     Dicts without scale_degree / meter_norm fall back to sensible defaults
     so older data remains loadable.
@@ -114,9 +119,7 @@ def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True):
     features = []
     chords = []
     for row in tune:
-        p = row["pitch"]
         if normalize:
-            p    = max(0.0, min(1.0, (float(p) - PITCH_MIN) / (PITCH_MAX - PITCH_MIN + 1e-8)))
             dur  = min(float(row["duration"]), _DURATION_MAX) / _DURATION_MAX
             beat = max(0.0, min(1.0, (float(row["beat"]) - 1.0) / (_BEAT_MAX - 1.0)))
             meas = min(float(row["measure"]), _MEASURE_MAX) / _MEASURE_MAX
@@ -134,7 +137,7 @@ def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True):
         else:
             sd_vec = [sd_raw / _SCALE_DEG_MAX]
 
-        features.append([p, dur, beat, meas, float(row["is_rest"])] + sd_vec + [mtr])
+        features.append([dur, beat, meas, float(row["is_rest"])] + sd_vec + [mtr])
         chords.append(row["target_chord"])
 
     X = np.array(features, dtype=np.float32)
@@ -193,7 +196,7 @@ if TORCH_AVAILABLE:
     class LSTMChordModel(nn.Module):
         """LSTM that takes a sequence of note features and predicts chord at each step."""
 
-        def __init__(self, input_dim=INPUT_DIM, hidden_dim=64, num_layers=2, num_classes=50,
+        def __init__(self, input_dim=INPUT_DIM, hidden_dim=32, num_layers=2, num_classes=50,
                      dropout=0.5, bidirectional=True):
             super().__init__()
             self.input_dim = input_dim
