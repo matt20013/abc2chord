@@ -2,6 +2,7 @@ import re
 import music21
 import music21.key
 import music21.meter
+import music21.bar
 import sys
 import argparse
 
@@ -440,7 +441,165 @@ def _get_key_info(score) -> tuple[int, str]:
     return 2, "D major (default)"  # most common in Irish / folk
 
 
-def _get_key_timeline(score) -> list[tuple[float, int, str]]:
+def _get_adaptive_key_timeline(score) -> list[tuple[float, int, str]]:
+    """
+    Adaptive Chunking for Local Key Detection.
+
+    Segments the score based on structural boundaries (repeats, double bars, explicit keys)
+    and falls back to an 8-bar grid heuristic for long sections.
+    Analyzes the local key for each segment independently.
+
+    Returns:
+        list of (offset, tonic_pc, label) sorted by offset.
+    """
+    # Work with the first part if available to iterate measures
+    if hasattr(score, "parts") and score.parts:
+        part = score.parts[0]
+    else:
+        part = score
+
+    # Flatten once to easily grab notes by offset range later
+    flat_score = score.flatten()
+
+    # 1. Pickup Detection & Measure Iteration
+    measures = list(part.getElementsByClass(music21.stream.Measure))
+    if not measures:
+        # Fallback for streams without measures (e.g. raw notes)
+        return _get_key_timeline_legacy(score)
+
+    # Check for pickup measure (Measure 0 or incomplete first measure)
+    first_m = measures[0]
+
+    # Estimate full measure duration
+    ts = first_m.timeSignature
+    if not ts:
+        ts_iter = part.flatten().getElementsByClass(music21.meter.TimeSignature)
+        if ts_iter:
+            ts = ts_iter[0]
+
+    full_duration = ts.barDuration.quarterLength if ts else 4.0
+
+    # Check if first measure is pickup
+    # (shorter than full bar OR explicitly numbered 0)
+    is_pickup = (first_m.duration.quarterLength < full_duration) or (first_m.measureNumber == 0)
+
+    # 2. Identify Structural Boundaries
+    # Always include 0.0 and end of score
+    boundaries = {0.0, float(part.duration.quarterLength)}
+
+    for m in measures:
+        m_start = float(m.offset)
+        m_end = m_start + m.duration.quarterLength
+
+        # Explicit Key Changes inside measure
+        # Use recurse() or getElementsByClass on the measure
+        for k in m.getElementsByClass([music21.key.Key, music21.key.KeySignature]):
+            # Key offset is relative to measure
+            boundaries.add(float(m_start + k.offset))
+
+        # Repeats & Double Bars (usually at end of measure)
+        if m.rightBarline:
+            # Check style or type. In music21, .style is a Style object, .type is the string.
+            b_type = getattr(m.rightBarline, 'type', None)
+            if b_type in ['double', 'final', 'light-light', 'light-heavy', 'heavy-light', 'heavy-heavy']:
+                 boundaries.add(float(m_end))
+            # Repeat barlines
+            if isinstance(m.rightBarline, music21.bar.Repeat):
+                 boundaries.add(float(m_end))
+
+    sorted_bounds = sorted(list(boundaries))
+
+    # 3. Refine Segments (The 8-Bar Grid) & Collect Final Chunks
+    final_chunks = []
+
+    for i in range(len(sorted_bounds) - 1):
+        start = sorted_bounds[i]
+        end = sorted_bounds[i+1]
+
+        if start >= end:
+            continue
+
+        # Find measures in this range
+        # Use a small epsilon to handle float precision
+        seg_measures = [m for m in measures if m.offset >= start - 0.001 and (m.offset + m.duration.quarterLength) <= end + 0.001]
+
+        if not seg_measures:
+            # No full measures (e.g. pickup only, or mid-measure split), just keep the chunk
+            final_chunks.append((start, end))
+            continue
+
+        # Filter out pickup measure from the "counting" logic if it's the very first measure
+        valid_measures = [m for m in seg_measures if not (is_pickup and m is first_m)]
+
+        if len(valid_measures) <= 12:
+             # Short enough segment, keep as one
+             final_chunks.append((start, end))
+        else:
+             # Split into ~8 bar blocks
+             current_block_start = start
+             count = 0
+             for m in valid_measures:
+                 count += 1
+                 if count >= 8:
+                     # Split point at end of this measure
+                     split_point = float(m.offset + m.duration.quarterLength)
+                     final_chunks.append((current_block_start, split_point))
+                     current_block_start = split_point
+                     count = 0
+             # Add remainder
+             if current_block_start < end:
+                 final_chunks.append((current_block_start, end))
+
+    # 4. Analyze Key for each Chunk
+    results = []
+
+    # Pre-fetch all notes to avoid repeated iteration if possible,
+    # but flat_score.notes is a list/iterator.
+    all_notes = list(flat_score.notes)
+
+    for (start, end) in final_chunks:
+        # Extract notes in this time range
+        chunk_notes = [n for n in all_notes if n.offset >= start - 0.001 and n.offset < end - 0.001]
+
+        if not chunk_notes:
+            # Inherit previous key or default
+            if results:
+                k_prev = results[-1]
+                results.append((start, k_prev[1], k_prev[2]))
+            else:
+                # Default
+                results.append((start, 2, "D major (default)"))
+            continue
+
+        # Analyze
+        s_temp = music21.stream.Stream()
+        for n in chunk_notes:
+            s_temp.append(n)
+
+        k = s_temp.analyze('key')
+        results.append((start, k.tonic.pitchClass, f"{k.tonic.name} {k.mode}"))
+
+    # 5. Merge adjacent same keys
+    if not results:
+        return _get_key_timeline_legacy(score)
+
+    merged_timeline = []
+    curr_start, curr_pc, curr_lbl = results[0]
+
+    for i in range(1, len(results)):
+        next_start, next_pc, next_lbl = results[i]
+        if next_pc == curr_pc:
+            # Same key, extend current chunk
+            continue
+        else:
+            # New key
+            merged_timeline.append((curr_start, curr_pc, curr_lbl))
+            curr_start, curr_pc, curr_lbl = next_start, next_pc, next_lbl
+    merged_timeline.append((curr_start, curr_pc, curr_lbl))
+
+    return merged_timeline
+
+def _get_key_timeline_legacy(score) -> list[tuple[float, int, str]]:
     """Return [(offset, tonic_pc, label), …] for every key change in the score.
 
     When patch_key_changes.py has injected an inline [K:X] at a section
@@ -466,6 +625,9 @@ def _get_key_timeline(score) -> list[tuple[float, int, str]]:
         except Exception:
             pass
     return [(0.0, 2, "D major (default)")]
+
+def _get_key_timeline(score):
+    return _get_adaptive_key_timeline(score)
 
 
 def _active_key_at(
