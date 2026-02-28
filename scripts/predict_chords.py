@@ -65,7 +65,7 @@ def main():
         return
 
     # 4. Predict
-    X, _ = tune_to_arrays(features, vocab=None, normalize=True)
+    X, _ = tune_to_arrays(features, normalize=True)
     logits = predict_chords(model, X, lengths=len(X), vocab=vocab, device=device)
     
     # Handle batch dimension

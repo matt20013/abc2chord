@@ -105,7 +105,7 @@ _SCALE_DEG_MAX   = 11.0   # chromatic degrees 0-11
 _METER_NUM_MAX   = 12.0   # largest expected time-sig numerator (12/8)
 
 
-def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True, hierarchical=False):
+def tune_to_arrays(tune, normalize=True, one_hot_scale_degree=True, hierarchical=False):
     """Convert one tune (list of feature dicts) to (features, chord_indices).
 
     Absolute pitch is excluded; scale degree encodes melodic function in a
@@ -166,7 +166,7 @@ class ChordSequenceDataset(Dataset):
         self.tunes = []
         self.lengths = []
         for tune in tunes:
-            X, y = tune_to_arrays(tune, vocab=vocab, normalize=normalize,
+            X, y = tune_to_arrays(tune, normalize=normalize,
                                   one_hot_scale_degree=one_hot_scale_degree, hierarchical=hierarchical)
             if len(X) == 0:
                 continue
@@ -363,7 +363,7 @@ def predict_chords_from_tune(model, tune, vocab, device=None, normalize=True, hi
     Predict chord labels for one tune (list of feature dicts from parser).
     Returns a list of chord label strings, one per note.
     """
-    X, _ = tune_to_arrays(tune, vocab=None, normalize=normalize, hierarchical=hierarchical)
+    X, _ = tune_to_arrays(tune, normalize=normalize, hierarchical=hierarchical)
     if len(X) == 0:
         return []
     lengths = len(X)

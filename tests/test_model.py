@@ -76,7 +76,7 @@ class TestTuneToArrays(unittest.TestCase):
             {"duration": 1.0, "beat": 1.0, "measure": 1, "is_rest": 0, "scale_degree": 0, "target_chord": "C", "meter_norm": 0.5},
             {"duration": 0.5, "beat": 2.0, "measure": 1, "is_rest": 0, "scale_degree": 7, "target_chord": "G", "meter_norm": 0.5}
         ]
-        X, y = tune_to_arrays(tune, vocab=self.vocab, normalize=True, one_hot_scale_degree=True)
+        X, y = tune_to_arrays(tune, normalize=True, one_hot_scale_degree=True)
 
         self.assertEqual(X.shape, (2, 17)) # 4 base + 12 one-hot + 1 meter
         self.assertEqual(y.shape, (2, 12)) # 12-dim Multi-Hot
@@ -91,7 +91,7 @@ class TestTuneToArrays(unittest.TestCase):
         tune = [
             {"duration": 4.0, "beat": 1.0, "measure": 1, "is_rest": 0, "scale_degree": 0, "target_chord": "C", "meter_norm": 0.5}
         ]
-        X, y = tune_to_arrays(tune, vocab=None, normalize=False, one_hot_scale_degree=False)
+        X, y = tune_to_arrays(tune, normalize=False, one_hot_scale_degree=False)
 
         self.assertEqual(X.shape, (1, 6)) # 4 base + 1 scalar + 1 meter
         self.assertEqual(X[0, 0], 4.0) # duration
