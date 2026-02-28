@@ -31,7 +31,7 @@ def get_chord_templates(hierarchical=False):
     """
     Generate a dictionary of relative chord templates.
     Returns:
-        list of (root_offset, quality_suffix, vector)
+        dict: Keys are (root_offset, quality_suffix), values are vectors
     """
     # Base qualities (indices relative to root 0)
     qualities_flat = {
@@ -63,7 +63,7 @@ def get_chord_templates(hierarchical=False):
     # Choose base set
     qualities = qualities_hierarchical if hierarchical else qualities_flat
 
-    templates = []
+    templates = {}
 
     for root_offset in range(12):
         for suffix, intervals in qualities.items():
@@ -74,7 +74,7 @@ def get_chord_templates(hierarchical=False):
                 shifted = [(idx + root_offset) % 12 for idx in intervals]
 
             vec = _generate_template_vector(shifted)
-            templates.append((root_offset, suffix, vec))
+            templates[(root_offset, suffix)] = vec
 
     return templates
 
@@ -122,12 +122,8 @@ def encode_chord_to_target(chord_str, key_tonic_pc, hierarchical=False):
     templates = _get_cached_templates(hierarchical)
 
     # Find matching template: (root_offset, suffix, vec)
-    # We loop to find the exact match for (rel_root, suffix)
-    found_vec = None
-    for r_off, sfx, vec in templates:
-        if r_off == rel_root and sfx == suffix:
-            found_vec = vec
-            break
+    # We perform an O(1) dictionary lookup for (rel_root, suffix)
+    found_vec = templates.get((rel_root, suffix))
 
     if found_vec is not None:
         return found_vec
@@ -166,7 +162,7 @@ def decode_target_to_chord(target_vector, key_tonic_pc, hierarchical=False):
 
     templates = _get_cached_templates(hierarchical)
 
-    for root_offset, suffix, template_vec in templates:
+    for (root_offset, suffix), template_vec in templates.items():
         template_norm = np.linalg.norm(template_vec) # Pre-computable
         if template_norm < 1e-6:
             continue
