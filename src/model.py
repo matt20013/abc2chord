@@ -352,7 +352,7 @@ def load_model_and_vocab(checkpoint_dir, device=None):
 
     model = LSTMChordModel(**kwargs)
     if os.path.exists(model_path):
-        model.load_state_dict(torch.load(model_path, map_location=device or "cpu"))
+        model.load_state_dict(torch.load(model_path, map_location=device or "cpu", weights_only=True))
     if device is not None:
         model = model.to(device)
     return model, vocab
