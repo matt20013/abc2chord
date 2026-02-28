@@ -719,14 +719,18 @@ def _extract_features_from_score(score):
     meter_norm   = min(meter_num, _METER_NUM_MAX) / _METER_NUM_MAX
 
     dataset = []
+    chord_idx = 0
+    num_chords = len(chords)
+    current_best_chord = None
+
     for n in melody.notesAndRests:
         active_chord = "N.C."
-        current_best_chord = None
-        for c in chords:
-            if c.offset <= n.offset:
-                current_best_chord = c
-            else:
-                break
+
+        # Advance chord_idx to find the most recent chord at or before this note's offset
+        while chord_idx < num_chords and chords[chord_idx].offset <= n.offset:
+            current_best_chord = chords[chord_idx]
+            chord_idx += 1
+
         if current_best_chord:
             raw_chord    = current_best_chord.figure
             active_chord = simplify_chord_label(raw_chord, relaxed=_RELAXED_MODE)
