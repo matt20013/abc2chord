@@ -232,7 +232,7 @@ def main():
     print(f"\n{BOLD}Tune {idx+1}/{len(val_scores)}: {title}{RESET}{key_info}\n")
 
     # ── Inference ────────────────────────────────────────────────────────────
-    X, _ = tune_to_arrays(tune, vocab=None, normalize=True,
+    X, _ = tune_to_arrays(tune, normalize=True,
                           one_hot_scale_degree=sd_onehot)
     if len(X) == 0:
         print("Tune has no notes.", file=sys.stderr)

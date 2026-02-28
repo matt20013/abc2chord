@@ -55,7 +55,7 @@ def predict_for_score(score, model, vocab, device):
         return [], []
 
     # 1. Prepare data
-    X, _ = tune_to_arrays(features, vocab=None, normalize=True)
+    X, _ = tune_to_arrays(features, normalize=True)
     X_tensor = torch.FloatTensor(X).unsqueeze(0).to(device)
     lengths = torch.tensor([len(X)])
 
