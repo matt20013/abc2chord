@@ -32,6 +32,29 @@ class TestChordEncoding(unittest.TestCase):
         expected = np.zeros(12, dtype=np.float32)
         np.testing.assert_array_equal(target, expected)
 
+    def test_encode_malformed(self):
+        expected = np.zeros(12, dtype=np.float32)
+
+        # Empty string
+        np.testing.assert_array_equal(encode_chord_to_target("", 0), expected)
+        # None
+        np.testing.assert_array_equal(encode_chord_to_target(None, 0), expected)
+
+        # Invalid root notes
+        np.testing.assert_array_equal(encode_chord_to_target("H7", 0), expected)
+        np.testing.assert_array_equal(encode_chord_to_target("Junk", 0), expected)
+        np.testing.assert_array_equal(encode_chord_to_target("123", 0), expected)
+
+        # Unsupported roots (not in _NOTE_TO_PC)
+        np.testing.assert_array_equal(encode_chord_to_target("Cb", 0), expected)
+        np.testing.assert_array_equal(encode_chord_to_target("E#", 0), expected)
+        np.testing.assert_array_equal(encode_chord_to_target("Gbb", 0), expected)
+
+        # Valid root but unknown suffix
+        np.testing.assert_array_equal(encode_chord_to_target("Cmaj9", 0), expected)
+        np.testing.assert_array_equal(encode_chord_to_target("Gfoo", 0), expected)
+        np.testing.assert_array_equal(encode_chord_to_target("A13", 0), expected)
+
     def test_decode_exact(self):
         # Create a perfect G7 vector relative to C (Root=G=7)
         # G7 = G, B, D, F -> 7, 11, 2, 5
