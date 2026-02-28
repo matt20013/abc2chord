@@ -1,16 +1,7 @@
 import numpy as np
 import re
 
-# Note-to-pitch-class mapping (copied from src/parser.py to avoid circular imports)
-_NOTE_TO_PC = {
-    "C": 0,  "C#": 1,  "Db": 1,  "D": 2,  "D#": 3,  "Eb": 3,
-    "E": 4,  "F": 5,   "F#": 6,  "Gb": 6, "G": 7,   "G#": 8,
-    "Ab": 8, "A": 9,   "A#": 10, "Bb": 10, "B": 11,
-}
-
-_PC_TO_NOTE = [
-    "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"
-]
+from src.constants import _NOTE_TO_PC, _PC_TO_NOTE
 
 def get_note_pc(note_name):
     """Map a note name (e.g., 'C', 'F#', 'Gb') to its pitch class (0-11)."""
