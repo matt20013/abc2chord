@@ -176,6 +176,27 @@ class TestInference(unittest.TestCase):
         # predict_chords now returns logits, so it should be a numpy array of shape (1, 5, 12)
         self.assertEqual(logits.shape, (1, 5, 12))
 
+    def test_predict_chords_default_lengths(self):
+        """Verify predict_chords handles default lengths=None with torch tensor."""
+        X = torch.randn(1, 5, 17)
+        # We wrap forward to check if it was called with lengths=None
+        with patch.object(self.model, 'forward', wraps=self.model.forward) as mock_forward:
+            logits = predict_chords(self.model, X, lengths=None)
+            mock_forward.assert_called_once()
+            _, kwargs = mock_forward.call_args
+            self.assertIsNone(kwargs.get('lengths'))
+            self.assertEqual(logits.shape, (1, 5, 12))
+
+    def test_predict_chords_numpy_default_lengths(self):
+        """Verify predict_chords handles default lengths=None with numpy array."""
+        X_np = np.random.randn(5, 17).astype(np.float32)
+        with patch.object(self.model, 'forward', wraps=self.model.forward) as mock_forward:
+            logits = predict_chords(self.model, X_np, lengths=None)
+            mock_forward.assert_called_once()
+            _, kwargs = mock_forward.call_args
+            self.assertIsNone(kwargs.get('lengths'))
+            self.assertEqual(logits.shape, (1, 5, 12))
+
     def test_predict_chords_from_tune(self):
         tune = [
             {"duration": 1.0, "beat": 1.0, "measure": 1, "is_rest": 0, "scale_degree": 0, "target_chord": "C", "key_tonic_pc": 0}
