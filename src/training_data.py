@@ -125,12 +125,19 @@ def load_training_tunes(data_dir=None, abc_paths=None, augment_keys=False):
             continue
         try:
             for score in _iter_scores_from_abc(path):
-                semitone_range = range(12) if augment_keys else range(1)
-                for semitones in semitone_range:
-                    s = score.transpose(semitones) if semitones != 0 else score
-                    dataset = _extract_features_from_score(s)
-                    if tune_has_chords(dataset):
-                        tunes.append(dataset)
+                # Always extract and check the base score first
+                base_dataset = _extract_features_from_score(score)
+                if not tune_has_chords(base_dataset):
+                    continue  # Skip unchorded tune entirely
+
+                tunes.append(base_dataset)
+
+                if augment_keys:
+                    for semitones in range(1, 12):
+                        s = score.transpose(semitones)
+                        dataset = _extract_features_from_score(s)
+                        if tune_has_chords(dataset):
+                            tunes.append(dataset)
         except Exception:
             continue
     return tunes
