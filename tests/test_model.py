@@ -65,6 +65,15 @@ class TestChordVocabulary(unittest.TestCase):
             self.assertEqual(len(loaded_vocab), 3)
             self.assertEqual(loaded_vocab.encode("C"), 2)
 
+    def test_load_missing_file(self):
+        # Verify that loading from a non-existent path returns a new, default vocabulary
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_path = os.path.join(tmpdir, "does_not_exist.json")
+            loaded_vocab = ChordVocabulary.load(missing_path)
+            self.assertEqual(len(loaded_vocab), 2)
+            self.assertEqual(loaded_vocab.label_to_idx[ChordVocabulary.PAD], 0)
+            self.assertEqual(loaded_vocab.label_to_idx[ChordVocabulary.UNK], 1)
+
 class TestTuneToArrays(unittest.TestCase):
     def setUp(self):
         self.vocab = ChordVocabulary()
