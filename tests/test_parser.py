@@ -7,6 +7,7 @@ from src.parser import (
     extract_all_tunes_from_abc,
     absolute_to_degree,
     map_chord_to_degree,
+    degree_to_chord,
     simplify_chord_label,
     _get_key_timeline,
     _active_key_at,
@@ -69,6 +70,37 @@ K:C
         # Using music21 key object
         k = music21.key.Key("G")
         self.assertEqual(map_chord_to_degree("D7", k), "V7")
+
+    def test_degree_to_chord(self):
+        # Edge Cases
+        self.assertEqual(degree_to_chord("", 0), "")
+        self.assertEqual(degree_to_chord(None, 0), None)
+        self.assertEqual(degree_to_chord("N.C.", 0), "N.C.")
+        self.assertEqual(degree_to_chord("XYZ", 0), "XYZ")
+
+        # Basic Chords (Key of C)
+        self.assertEqual(degree_to_chord("I", 0), "C")
+        self.assertEqual(degree_to_chord("ii", 0), "Dm")
+        self.assertEqual(degree_to_chord("IV", 0), "F")
+        self.assertEqual(degree_to_chord("V", 0), "G")
+        self.assertEqual(degree_to_chord("vi", 0), "Am")
+
+        # Qualities (Key of C)
+        self.assertEqual(degree_to_chord("V7", 0), "G7")
+        self.assertEqual(degree_to_chord("ii7", 0), "Dm7")
+        self.assertEqual(degree_to_chord("viidim", 0), "Bdim")
+        self.assertEqual(degree_to_chord("IIIaug", 0), "Eaug")
+
+        # Flat Roots (Key of C)
+        self.assertEqual(degree_to_chord("bVII", 0), "Bb")
+        self.assertEqual(degree_to_chord("bIII", 0), "Eb")
+        self.assertEqual(degree_to_chord("bvi", 0), "Abm")
+
+        # Different Tonic (Key of D, pc=2)
+        self.assertEqual(degree_to_chord("I", 2), "D")
+        self.assertEqual(degree_to_chord("V7", 2), "A7")
+        self.assertEqual(degree_to_chord("vi", 2), "Bm")
+        self.assertEqual(degree_to_chord("IV", 2), "G")
 
     def test_simplify_chord_label(self):
         # Relaxed mode
