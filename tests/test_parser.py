@@ -8,6 +8,7 @@ from src.parser import (
     absolute_to_degree,
     map_chord_to_degree,
     simplify_chord_label,
+    apply_super_class,
     _get_key_timeline,
     _active_key_at,
     _sanitise_abc_body
@@ -56,6 +57,47 @@ K:C
         self.assertEqual(absolute_to_degree(7, 7, ""), "I")
         self.assertEqual(absolute_to_degree(0, 7, ""), "IV")
         self.assertEqual(absolute_to_degree(2, 7, "7"), "V7")
+
+    def test_apply_super_class(self):
+        # Tonic major
+        self.assertEqual(apply_super_class("I"), "I")
+        self.assertEqual(apply_super_class("I7"), "I")
+        self.assertEqual(apply_super_class("II"), "I")
+
+        # Minor / sub-tonic family
+        self.assertEqual(apply_super_class("i"), "i")
+        self.assertEqual(apply_super_class("ii"), "i")
+        self.assertEqual(apply_super_class("vi"), "i")
+        self.assertEqual(apply_super_class("bvi"), "i")
+        self.assertEqual(apply_super_class("VIdim"), "i")
+
+        # Dominant function
+        self.assertEqual(apply_super_class("V"), "V")
+        self.assertEqual(apply_super_class("V7"), "V")
+        self.assertEqual(apply_super_class("v"), "V")
+        self.assertEqual(apply_super_class("bv"), "V")
+        self.assertEqual(apply_super_class("II7"), "V")
+        self.assertEqual(apply_super_class("vii"), "V")
+
+        # Subdominant
+        self.assertEqual(apply_super_class("IV"), "IV")
+        self.assertEqual(apply_super_class("iv"), "IV")
+
+        # Modal flat-seven
+        self.assertEqual(apply_super_class("bVII"), "bVII")
+
+        # Modal flat-three
+        self.assertEqual(apply_super_class("bIII"), "bIII")
+        self.assertEqual(apply_super_class("bVI"), "bIII")
+
+        # Pass-through / N.C.
+        self.assertEqual(apply_super_class("N.C."), "N.C.")
+
+        # Unmapped / Fallback (returned unchanged)
+        self.assertEqual(apply_super_class("random_string"), "random_string")
+        self.assertEqual(apply_super_class("VIIdim7"), "VIIdim7")
+        self.assertEqual(apply_super_class("IIIaug"), "IIIaug")
+        self.assertEqual(apply_super_class("bVIIdim"), "bVIIdim")
 
     def test_map_chord_to_degree(self):
         # Using pitch class integer
