@@ -74,7 +74,8 @@ def get_chord_templates(hierarchical=False):
                 shifted = [(idx + root_offset) % 12 for idx in intervals]
 
             vec = _generate_template_vector(shifted)
-            templates.append((root_offset, suffix, vec))
+            norm = np.linalg.norm(vec)
+            templates.append((root_offset, suffix, vec, norm))
 
     return templates
 
@@ -124,7 +125,7 @@ def encode_chord_to_target(chord_str, key_tonic_pc, hierarchical=False):
     # Find matching template: (root_offset, suffix, vec)
     # We loop to find the exact match for (rel_root, suffix)
     found_vec = None
-    for r_off, sfx, vec in templates:
+    for r_off, sfx, vec, _norm in templates:
         if r_off == rel_root and sfx == suffix:
             found_vec = vec
             break
@@ -166,8 +167,7 @@ def decode_target_to_chord(target_vector, key_tonic_pc, hierarchical=False):
 
     templates = _get_cached_templates(hierarchical)
 
-    for root_offset, suffix, template_vec in templates:
-        template_norm = np.linalg.norm(template_vec) # Pre-computable
+    for root_offset, suffix, template_vec, template_norm in templates:
         if template_norm < 1e-6:
             continue
 
