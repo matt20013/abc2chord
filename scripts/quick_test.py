@@ -120,7 +120,7 @@ def main():
     # Load state dict first so we can infer the actual saved architecture.
     # This is more reliable than trusting model_config.json, which may have
     # been overwritten by a more recent (untrained) run.
-    state_dict = torch.load(model_path, map_location="cpu")
+    state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
 
     def _infer_cfg(sd):
         """Read architecture hyperparameters directly from weight shapes."""

@@ -267,7 +267,7 @@ def main():
             device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
             # We bypass the old src.model.load_model_and_vocab if it's outdated
             # and use our fixed logic directly
-            checkpoint = torch.load(target_path if not os.path.isdir(target_path) else os.path.join(target_path, "lstm_chord.pt"), map_location=device)
+            checkpoint = torch.load(target_path if not os.path.isdir(target_path) else os.path.join(target_path, "lstm_chord.pt"), map_location=device, weights_only=True)
             
             # Load Vocab
             vocab_path = os.path.join(checkpoint_dir, "chord_vocab.json")
