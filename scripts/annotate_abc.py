@@ -25,27 +25,13 @@ sys.path.insert(0, _ROOT)
 
 # Explicitly import the parser and model utilities
 from src.parser import _extract_features_from_score, degree_to_chord
-from src.model import tune_to_arrays, predict_chords
+from src.model import load_model, tune_to_arrays, predict_chords
+from src.chord_encoding import decode_target_to_chord
 # ---------------------------------------------------------------------------
 # 1. Prediction Helpers
 # ---------------------------------------------------------------------------
 
-class LSTMChordModel(nn.Module):
-    def __init__(self, vocab_size, hidden_dim=32, n_layers=2, dropout=0.5, 
-                 one_hot_scale_degree=True): # <--- MATCHING THE TRAINED ARCHITECTURE
-        super(LSTMChordModel, self).__init__()
-        self.input_dim = 17 if one_hot_scale_degree else 6
-        self.lstm = nn.LSTM(self.input_dim, hidden_dim, n_layers, 
-                            batch_first=True, dropout=dropout, bidirectional=True)
-        self.fc = nn.Linear(hidden_dim * 2, vocab_size)
-
-    def forward(self, x, lengths):
-        packed_x = nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False)
-        packed_out, _ = self.lstm(packed_x)
-        out, _ = nn.utils.rnn.pad_packed_sequence(packed_out, batch_first=True)
-        return self.fc(out)
-
-def predict_for_score(score, model, vocab, device):
+def predict_for_score(score, model, hierarchical, device):
     """
     Extract features and run inference.
     Returns (features, predictions).
@@ -55,21 +41,24 @@ def predict_for_score(score, model, vocab, device):
         return [], []
 
     # 1. Prepare data
-    X, _ = tune_to_arrays(features, vocab=None, normalize=True)
+    X, _ = tune_to_arrays(features, normalize=True)
     X_tensor = torch.FloatTensor(X).unsqueeze(0).to(device)
     lengths = torch.tensor([len(X)])
 
-    # 2. Run raw inference (don't use predict_chords here to avoid the .decode() error)
-    model.eval()
-    with torch.no_grad():
-        output = model(X_tensor, lengths)
-        # Get the index of the highest logit for each note
-        pred_indices = output.argmax(dim=-1).squeeze(0).cpu().numpy()
+    # 2. Run raw inference
+    logits = predict_chords(model, X_tensor, lengths=lengths, device=device)
+    if logits.ndim == 3:
+        logits = logits[0]
 
-    # 3. Manually decode using your dict (handling string vs int keys)
-    # Your vocab dict is likely { "0": "<PAD>", "1": "I", ... }
-    inv_vocab = {int(k): v for k, v in vocab.items()}
-    predictions = [inv_vocab.get(int(idx), "<UNK>") for idx in pred_indices]
+    # 3. Decode
+    predictions = []
+    for i, row in enumerate(features):
+        logit_vec = logits[i]
+        prob_vec = 1.0 / (1.0 + np.exp(-logit_vec))
+
+        key_tonic = row.get("key_tonic_pc", 0)
+        chord_str = decode_target_to_chord(prob_vec, key_tonic, hierarchical=hierarchical)
+        predictions.append(chord_str)
 
     return features, predictions
 def get_measure_chords(features, predictions):
@@ -96,22 +85,20 @@ def get_measure_chords(features, predictions):
     # This might be fragile if music21 numbers differ.
 
     # Let's stick to measure number for grouping first.
-    for feat, pred_degree in zip(features, predictions):
+    for feat, pred_chord in zip(features, predictions):
         m_num = feat["measure"]
-        measures[m_num].append(pred_degree)
+        measures[m_num].append(pred_chord)
         if m_num not in measure_keys:
             measure_keys[m_num] = feat["key_tonic_pc"]
 
     # Resolve chords
     measure_chords = {}
-    for m_num, degrees in measures.items():
-        counts = collections.Counter(degrees)
-        winner_degree = counts.most_common(1)[0][0]
-        tonic_pc = measure_keys[m_num]
-        abs_chord = degree_to_chord(winner_degree, tonic_pc)
-        if abs_chord == "N.C.":
+    for m_num, chords in measures.items():
+        counts = collections.Counter(chords)
+        winner_chord = counts.most_common(1)[0][0]
+        if winner_chord == "N.C.":
             continue # Don't annotate N.C.
-        measure_chords[m_num] = abs_chord
+        measure_chords[m_num] = winner_chord
 
     return measure_chords
 
@@ -255,7 +242,8 @@ def main():
 
     # 1. Load Model (Correctly indented inside main)
     if args.mock:
-        model, vocab = None, None
+        model = None
+        hierarchical = False
         print("Using MOCK model.", file=sys.stderr)
     else:
         # Use our robust loading logic
@@ -265,25 +253,14 @@ def main():
         print(f"Loading model from {target_path}...", file=sys.stderr)
         try:
             device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-            # We bypass the old src.model.load_model_and_vocab if it's outdated
-            # and use our fixed logic directly
-            checkpoint = torch.load(target_path if not os.path.isdir(target_path) else os.path.join(target_path, "lstm_chord.pt"), map_location=device)
+            model = load_model(checkpoint_dir, device=device)
             
-            # Load Vocab
-            vocab_path = os.path.join(checkpoint_dir, "chord_vocab.json")
-            with open(vocab_path, 'r') as f:
-                vocab = json.load(f)
-            
-            config = checkpoint.get('config', {})
-            model = LSTMChordModel(
-                vocab_size=len(vocab),
-                hidden_dim=config.get('hidden_dim', 32),
-                n_layers=config.get('n_layers', 2),
-                one_hot_scale_degree=config.get('one_hot_scale_degree', True)
-            )
-            model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
-            model.to(device)
-            model.eval()
+            config_path = os.path.join(checkpoint_dir, "model_config.json")
+            hierarchical = False
+            if os.path.isfile(config_path):
+                with open(config_path) as f:
+                    cfg = json.load(f)
+                    hierarchical = cfg.get("hierarchical_targets", False)
         except Exception as e:
             sys.exit(f"Error loading model: {e}")
     # 2. Parse ABC
@@ -315,7 +292,7 @@ def main():
             measure_chords[m.measureNumber] = mock_pattern[i % len(mock_pattern)]
             i += 1
     else:
-        features, predictions = predict_for_score(score, model, vocab, device)
+        features, predictions = predict_for_score(score, model, hierarchical, device)
         if not features:
             sys.exit("Error: No features extracted from score.")
         measure_chords = get_measure_chords(features, predictions)

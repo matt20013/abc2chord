@@ -45,57 +45,6 @@ INPUT_DIM = get_input_dim(one_hot_scale_degree=True)   # = 17
 PITCH_MIN, PITCH_MAX = 21, 108
 
 
-class ChordVocabulary:
-    """Maps chord labels to indices. Build from training data or load from file."""
-
-    PAD = "<PAD>"
-    UNK = "<UNK>"
-
-    def __init__(self):
-        self.label_to_idx = {self.PAD: 0, self.UNK: 1}
-        self.idx_to_label = {0: self.PAD, 1: self.UNK}
-
-    def add_label(self, label):
-        if label not in self.label_to_idx:
-            idx = len(self.label_to_idx)
-            self.label_to_idx[label] = idx
-            self.idx_to_label[idx] = label
-
-    def fit(self, tunes):
-        """Build vocabulary from list of tunes (each tune = list of feature dicts)."""
-        for tune in tunes:
-            for row in tune:
-                c = row.get("target_chord")
-                if c is not None:
-                    self.add_label(c)
-        n_real = len(self) - 2  # exclude <PAD> and <UNK>
-        print(f"[ChordVocabulary] {n_real} chord labels  "
-              f"(+<PAD>+<UNK> = {len(self)} total classes)")
-        return self
-
-    def encode(self, label):
-        return self.label_to_idx.get(label, self.label_to_idx[self.UNK])
-
-    def decode(self, idx):
-        return self.idx_to_label.get(idx, self.UNK)
-
-    def __len__(self):
-        return len(self.label_to_idx)
-
-    def save(self, path):
-        with open(path, "w") as f:
-            json.dump(self.idx_to_label, f, indent=0)
-
-    @classmethod
-    def load(cls, path):
-        if not os.path.exists(path):
-            return cls()
-        with open(path) as f:
-            idx_to_label = {int(k): v for k, v in json.load(f).items()}
-        vocab = cls()
-        vocab.idx_to_label = idx_to_label
-        vocab.label_to_idx = {v: k for k, v in idx_to_label.items()}
-        return vocab
 
 
 _DURATION_MAX    = 8.0    # anything longer gets clipped to 1.0
@@ -105,7 +54,7 @@ _SCALE_DEG_MAX   = 11.0   # chromatic degrees 0-11
 _METER_NUM_MAX   = 12.0   # largest expected time-sig numerator (12/8)
 
 
-def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True, hierarchical=False):
+def tune_to_arrays(tune, normalize=True, one_hot_scale_degree=True, hierarchical=False):
     """Convert one tune (list of feature dicts) to (features, chord_indices).
 
     Absolute pitch is excluded; scale degree encodes melodic function in a
@@ -158,15 +107,15 @@ def tune_to_arrays(tune, vocab=None, normalize=True, one_hot_scale_degree=True, 
 class ChordSequenceDataset(Dataset):
     """Dataset of (padded) note sequences and chord labels for LSTM."""
 
-    def __init__(self, tunes, vocab=None, max_len=None, normalize=True,
+    def __init__(self, tunes, max_len=None, normalize=True,
                  one_hot_scale_degree=True, hierarchical=False):
-        self.vocab = vocab
+
         self.normalize = normalize
         self.one_hot_scale_degree = one_hot_scale_degree
         self.tunes = []
         self.lengths = []
         for tune in tunes:
-            X, y = tune_to_arrays(tune, vocab=vocab, normalize=normalize,
+            X, y = tune_to_arrays(tune, normalize=normalize,
                                   one_hot_scale_degree=one_hot_scale_degree, hierarchical=hierarchical)
             if len(X) == 0:
                 continue
@@ -311,7 +260,7 @@ def eval_epoch(model, loader, criterion, device, pad_idx=0):
     return (total_loss / n if n else 0.0), (correct / n if n else 0.0)
 
 
-def predict_chords(model, X, lengths=None, vocab=None, device=None):
+def predict_chords(model, X, lengths=None, device=None):
     """Run model on one or more sequences; return raw logits (numpy)."""
     if not TORCH_AVAILABLE:
         raise RuntimeError("PyTorch is required for prediction.")
@@ -329,16 +278,12 @@ def predict_chords(model, X, lengths=None, vocab=None, device=None):
     return logits.cpu().numpy()
 
 
-def load_model_and_vocab(checkpoint_dir, device=None):
-    """Load LSTMChordModel and ChordVocabulary from a checkpoint directory."""
+def load_model(checkpoint_dir, device=None):
+    """Load LSTMChordModel from a checkpoint directory."""
     if not TORCH_AVAILABLE:
         raise RuntimeError("PyTorch is required.")
-    vocab_path = os.path.join(checkpoint_dir, "chord_vocab.json")
     model_path = os.path.join(checkpoint_dir, "lstm_chord.pt")
     config_path = os.path.join(checkpoint_dir, "model_config.json")
-
-    # Try to load vocab, return empty if missing
-    vocab = ChordVocabulary.load(vocab_path)
 
     kwargs = {"num_classes": 12}
     if os.path.isfile(config_path):
@@ -355,21 +300,21 @@ def load_model_and_vocab(checkpoint_dir, device=None):
         model.load_state_dict(torch.load(model_path, map_location=device or "cpu"))
     if device is not None:
         model = model.to(device)
-    return model, vocab
+    return model
 
 
-def predict_chords_from_tune(model, tune, vocab, device=None, normalize=True, hierarchical=False):
+def predict_chords_from_tune(model, tune, device=None, normalize=True, hierarchical=False):
     """
     Predict chord labels for one tune (list of feature dicts from parser).
     Returns a list of chord label strings, one per note.
     """
-    X, _ = tune_to_arrays(tune, vocab=None, normalize=normalize, hierarchical=hierarchical)
+    X, _ = tune_to_arrays(tune, normalize=normalize, hierarchical=hierarchical)
     if len(X) == 0:
         return []
     lengths = len(X)
 
     # logits: (1, Seq, 12)
-    logits = predict_chords(model, X, lengths=lengths, vocab=vocab, device=device)
+    logits = predict_chords(model, X, lengths=lengths, device=device)
     logits = logits[0]
 
     labels = []

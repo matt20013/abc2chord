@@ -145,11 +145,10 @@ def main():
     input_dim = get_input_dim(sd_onehot)
 
     # ── Datasets & loaders ──────────────────────────────────────────────────
-    # vocab=None because targets are generated via chord_encoding
-    train_dataset = ChordSequenceDataset(train_tunes, vocab=None, normalize=True,
+    train_dataset = ChordSequenceDataset(train_tunes, normalize=True,
                                          one_hot_scale_degree=sd_onehot,
                                          hierarchical=args.hierarchical_targets)
-    val_dataset   = ChordSequenceDataset(val_tunes, vocab=None,
+    val_dataset   = ChordSequenceDataset(val_tunes,
                                          max_len=train_dataset.max_len, normalize=True,
                                          one_hot_scale_degree=sd_onehot,
                                          hierarchical=args.hierarchical_targets)

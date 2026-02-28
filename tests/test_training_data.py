@@ -8,12 +8,10 @@ from src.training_data import (
     load_training_data,
     load_training_tunes,
     train_val_split,
-    calculate_class_weights,
     _resolve_abc_paths,
     tune_has_chords,
     NO_CHORD
 )
-from src.model import ChordVocabulary
 
 class TestTrainingData(unittest.TestCase):
     def setUp(self):
@@ -26,8 +24,6 @@ L:1/4
 K:C
 "C" C D E F |
 """)
-        self.vocab = ChordVocabulary()
-        self.vocab.add_label("C")
 
     def tearDown(self):
         shutil.rmtree(self.test_dir)
@@ -80,19 +76,6 @@ K:C
         train2, val2 = train_val_split(tunes, val_fraction=0.1, seed=42)
         self.assertEqual(train, train2)
         self.assertEqual(val, val2)
-
-    def test_calculate_class_weights(self):
-        tunes = [[{"target_chord": "C"}, {"target_chord": "C"}]]
-        # Vocab has PAD, UNK, C
-        self.vocab.add_label("C")
-
-        weights = calculate_class_weights(tunes, self.vocab)
-        self.assertIsInstance(weights, torch.Tensor)
-        self.assertEqual(len(weights), len(self.vocab))
-
-        # PAD weight should be 0
-        pad_idx = self.vocab.label_to_idx[ChordVocabulary.PAD]
-        self.assertEqual(weights[pad_idx], 0.0)
 
 if __name__ == "__main__":
     unittest.main()

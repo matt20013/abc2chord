@@ -151,30 +151,3 @@ def train_val_split(tunes, val_fraction=0.1, seed=42):
     return train, val
 
 
-def calculate_class_weights(tunes, vocab):
-    """
-    Compute log-smoothed class weights over all chords in tunes.
-
-    Formula: w = log(1 + total / count)
-
-    Inverse-frequency weighting (total / count) produces extreme ratios (e.g.
-    500:1 for G vs. Abdim) that cause the model to hallucinate rare chords.
-    The log compresses that ratio to roughly 7:1, preserving a gentle nudge
-    toward under-represented chords without rewarding wild guesses.
-
-    <PAD> gets weight 0. Returns a float32 tensor.
-    """
-    import torch
-    all_chords = [row["target_chord"] for tune in tunes for row in tune]
-    counts = Counter(all_chords)
-    total = len(all_chords)
-    n_classes = len(vocab.label_to_idx)
-    weights = np.ones(n_classes, dtype=np.float32)
-    for label, idx in vocab.label_to_idx.items():
-        c = counts.get(label, 0)
-        if c > 0:
-            weights[idx] = np.log(1.0 + total / c)
-    weights /= weights.mean()
-    if vocab.PAD in vocab.label_to_idx:
-        weights[vocab.label_to_idx[vocab.PAD]] = 0.0
-    return torch.tensor(weights)

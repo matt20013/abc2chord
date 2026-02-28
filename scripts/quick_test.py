@@ -96,24 +96,18 @@ def main():
         print("PyTorch is required.", file=sys.stderr)
         return 1
 
-    from src.model import ChordVocabulary, LSTMChordModel, tune_to_arrays, get_input_dim
+    from src.model import LSTMChordModel, tune_to_arrays, get_input_dim
     from src.parser import (
         _iter_scores_from_abc, _extract_features_from_score,
         chord_to_degree, degree_to_chord,
     )
     from src.training_data import tune_has_chords, TRAINING_ABC_FILES
+    from src.chord_encoding import decode_target_to_chord
 
-    # ── Load checkpoint + vocab ──────────────────────────────────────────────
+    # ── Load checkpoint ──────────────────────────────────────────────────────
     ckpt_dir   = args.checkpoints
     model_path = _find_best_checkpoint(ckpt_dir)
-    vocab_path = os.path.join(ckpt_dir, "chord_vocab.json")
     config_path = os.path.join(ckpt_dir, "model_config.json")
-
-    if not os.path.isfile(vocab_path):
-        print(f"chord_vocab.json not found in {ckpt_dir}", file=sys.stderr)
-        return 1
-
-    vocab = ChordVocabulary.load(vocab_path)
 
     import json
 
@@ -232,7 +226,7 @@ def main():
     print(f"\n{BOLD}Tune {idx+1}/{len(val_scores)}: {title}{RESET}{key_info}\n")
 
     # ── Inference ────────────────────────────────────────────────────────────
-    X, _ = tune_to_arrays(tune, vocab=None, normalize=True,
+    X, _ = tune_to_arrays(tune, normalize=True,
                           one_hot_scale_degree=sd_onehot)
     if len(X) == 0:
         print("Tune has no notes.", file=sys.stderr)
@@ -272,10 +266,22 @@ def main():
 
     import music21.pitch
 
+    hierarchical = cfg.get("hierarchical_targets", False)
+
     prev_chord = None
     for i, row in enumerate(tune):
         truth = row["target_chord"]
-        pred  = vocab.decode(int(preds[i]))
+
+        # Decode prediction using decode_target_to_chord
+        prob_vec = probs[i].cpu().numpy()
+        key_tonic = row.get("key_tonic_pc", tune_tonic_pc)
+        pred_chord_str = decode_target_to_chord(prob_vec, key_tonic, hierarchical=hierarchical)
+
+        if degree_mode:
+            pred = chord_to_degree(pred_chord_str, key_tonic)
+        else:
+            pred = pred_chord_str
+
         c     = float(conf[i]) * 100.0
         note_midi = int(row["pitch"])
         sd        = int(row.get("scale_degree", 0))

@@ -21,7 +21,7 @@ _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
 try:
-    from src.model import load_model_and_vocab, tune_to_arrays, predict_chords
+    from src.model import load_model, tune_to_arrays, predict_chords
     from src.parser import _extract_features_from_score
     from src.chord_encoding import decode_target_to_chord
 except ImportError as e:
@@ -41,7 +41,7 @@ def main():
     target_path = args.checkpoint
     checkpoint_dir = target_path if os.path.isdir(target_path) else os.path.dirname(target_path)
     
-    model, vocab = load_model_and_vocab(checkpoint_dir, device=device)
+    model = load_model(checkpoint_dir, device=device)
     
     # Load hierarchical setting from config
     hierarchical = False
@@ -65,8 +65,8 @@ def main():
         return
 
     # 4. Predict
-    X, _ = tune_to_arrays(features, vocab=None, normalize=True)
-    logits = predict_chords(model, X, lengths=len(X), vocab=vocab, device=device)
+    X, _ = tune_to_arrays(features, normalize=True)
+    logits = predict_chords(model, X, lengths=len(X), device=device)
     
     # Handle batch dimension
     if logits.ndim == 3:
