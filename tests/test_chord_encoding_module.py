@@ -1,8 +1,24 @@
 import unittest
 import numpy as np
-from src.chord_encoding import encode_chord_to_target, decode_target_to_chord
+from src.chord_encoding import encode_chord_to_target, decode_target_to_chord, get_note_pc
 
 class TestChordEncoding(unittest.TestCase):
+    def test_get_note_pc_invalid(self):
+        # Invalid types or empty strings
+        self.assertIsNone(get_note_pc(None))
+        self.assertIsNone(get_note_pc(""))
+        self.assertIsNone(get_note_pc(123))
+
+        # Completely invalid strings
+        self.assertIsNone(get_note_pc("Hello"))
+        self.assertIsNone(get_note_pc("H"))
+
+        # Valid-looking notes that are not in the mapping
+        self.assertIsNone(get_note_pc("B#"))
+        self.assertIsNone(get_note_pc("Cb"))
+        self.assertIsNone(get_note_pc("E#"))
+        self.assertIsNone(get_note_pc("Fb"))
+
     def test_encode_simple(self):
         # C Major in C (Tonic)
         # C (0), E (4), G (7) -> Relative: 0, 4, 7
